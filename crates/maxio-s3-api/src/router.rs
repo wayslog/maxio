@@ -9,6 +9,7 @@ use axum::{
 use maxio_auth::{credentials::CredentialProvider, middleware::AuthLayer};
 use maxio_common::error::MaxioError;
 use maxio_iam::IAMSys;
+use maxio_lifecycle::LifecycleSys;
 use maxio_notification::NotificationSys;
 use maxio_storage::traits::ObjectLayer;
 
@@ -21,6 +22,7 @@ const MAX_BODY_SIZE: usize = 5 * 1024 * 1024 * 1024; // 5GB
 async fn get_bucket_dispatch(
     State(store): State<Arc<dyn ObjectLayer>>,
     Extension(notifications): Extension<Arc<NotificationSys>>,
+    Extension(lifecycle): Extension<Arc<LifecycleSys>>,
     Path(bucket): Path<String>,
     Query(query): Query<HashMap<String, String>>,
 ) -> Result<Response, S3Error> {
@@ -39,6 +41,13 @@ async fn get_bucket_dispatch(
             Path(bucket),
         )
         .await
+    } else if query.contains_key("lifecycle") {
+        handlers::lifecycle::get_bucket_lifecycle_configuration(
+            State(store),
+            Extension(lifecycle),
+            Path(bucket),
+        )
+        .await
     } else if query.get("list-type").is_some_and(|v| v == "2") {
         handlers::object::list_objects_v2(State(store), Path(bucket), Query(query)).await
     } else {
@@ -49,6 +58,7 @@ async fn get_bucket_dispatch(
 async fn put_bucket_dispatch(
     State(store): State<Arc<dyn ObjectLayer>>,
     Extension(notifications): Extension<Arc<NotificationSys>>,
+    Extension(lifecycle): Extension<Arc<LifecycleSys>>,
     Path(bucket): Path<String>,
     Query(query): Query<HashMap<String, String>>,
     body: axum::body::Bytes,
@@ -63,8 +73,34 @@ async fn put_bucket_dispatch(
             body,
         )
         .await
+    } else if query.contains_key("lifecycle") {
+        handlers::lifecycle::put_bucket_lifecycle_configuration(
+            State(store),
+            Extension(lifecycle),
+            Path(bucket),
+            body,
+        )
+        .await
     } else {
         handlers::bucket::make_bucket(State(store), Path(bucket)).await
+    }
+}
+
+async fn delete_bucket_dispatch(
+    State(store): State<Arc<dyn ObjectLayer>>,
+    Extension(lifecycle): Extension<Arc<LifecycleSys>>,
+    Path(bucket): Path<String>,
+    Query(query): Query<HashMap<String, String>>,
+) -> Result<Response, S3Error> {
+    if query.contains_key("lifecycle") {
+        handlers::lifecycle::delete_bucket_lifecycle_configuration(
+            State(store),
+            Extension(lifecycle),
+            Path(bucket),
+        )
+        .await
+    } else {
+        handlers::bucket::delete_bucket(State(store), Path(bucket)).await
     }
 }
 
@@ -157,6 +193,7 @@ pub fn s3_router(
     credential_provider: Arc<dyn CredentialProvider>,
     iam: Arc<IAMSys>,
     notifications: Arc<NotificationSys>,
+    lifecycle: Arc<LifecycleSys>,
 ) -> Router {
     let app: Router<Arc<dyn ObjectLayer>> = Router::<Arc<dyn ObjectLayer>>::new()
         .route("/minio/admin/v3/add-user", post(handlers::admin::add_user))
@@ -181,7 +218,7 @@ pub fn s3_router(
             "/{bucket}",
             put(put_bucket_dispatch)
                 .head(handlers::bucket::head_bucket)
-                .delete(handlers::bucket::delete_bucket)
+                .delete(delete_bucket_dispatch)
                 .get(get_bucket_dispatch),
         )
         .route(
@@ -197,5 +234,6 @@ pub fn s3_router(
         .layer(AuthLayer::new(credential_provider))
         .layer(Extension(iam))
         .layer(Extension(notifications))
+        .layer(Extension(lifecycle))
         .with_state(object_layer)
 }

@@ -3,13 +3,14 @@ use std::{path::PathBuf, sync::Arc};
 use clap::Parser;
 use maxio_auth::credentials::{CredentialProvider, StaticCredentialProvider};
 use maxio_iam::IAMSys;
+use maxio_lifecycle::{LifecycleStore, LifecycleSys};
 use maxio_notification::{NotificationStore, NotificationSys, WebhookTarget};
 use maxio_storage::{
     erasure::{ErasureConfig, objects::ErasureObjectLayer},
     single::SingleDiskObjectLayer,
     traits::ObjectLayer,
 };
-use tracing::info;
+use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
@@ -83,7 +84,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         StaticCredentialProvider::with_iam(access_key, secret_key, Arc::clone(&iam)),
     );
 
-    let mut notification_sys = NotificationSys::new(NotificationStore::new(notification_root));
+    let mut notification_sys = NotificationSys::new(NotificationStore::new(notification_root.clone()));
     if let Ok(endpoint) = std::env::var("MAXIO_NOTIFY_WEBHOOK_ENDPOINT") {
         let endpoint = endpoint.trim();
         if !endpoint.is_empty() {
@@ -95,9 +96,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     let notification_sys = Arc::new(notification_sys);
+    let lifecycle_store_root = notification_root.clone();
+    let lifecycle_sys = Arc::new(LifecycleSys::new(
+        LifecycleStore::new(lifecycle_store_root),
+        notification_root,
+    ));
 
-    let app =
-        maxio_s3_api::router::s3_router(object_layer, credential_provider, iam, notification_sys);
+    let lifecycle_runner = Arc::clone(&lifecycle_sys);
+    let lifecycle_objects = Arc::clone(&object_layer);
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(60 * 60));
+        loop {
+            interval.tick().await;
+            if let Err(err) = lifecycle_runner
+                .run_lifecycle_scan(Arc::clone(&lifecycle_objects))
+                .await
+            {
+                warn!(error = %err, "lifecycle background scan failed");
+            }
+        }
+    });
+    info!("lifecycle background scanner enabled");
+
+    let app = maxio_s3_api::router::s3_router(
+        object_layer,
+        credential_provider,
+        iam,
+        notification_sys,
+        lifecycle_sys,
+    );
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     info!("maxio server listening on {addr}");

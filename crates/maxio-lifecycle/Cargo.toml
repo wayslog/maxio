@@ -5,8 +5,10 @@ edition.workspace = true
 
 [dependencies]
 maxio-common = { workspace = true }
+maxio-storage = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 chrono = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }

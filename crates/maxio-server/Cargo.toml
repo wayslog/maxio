@@ -11,6 +11,7 @@ path = "src/main.rs"
 maxio-common = { workspace = true }
 maxio-auth = { workspace = true }
 maxio-iam = { workspace = true }
+maxio-lifecycle = { workspace = true }
 maxio-notification = { workspace = true }
 maxio-s3-api = { workspace = true }
 maxio-storage = { workspace = true }
