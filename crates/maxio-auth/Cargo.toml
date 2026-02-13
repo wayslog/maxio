@@ -1,0 +1,16 @@
+[package]
+name = "maxio-auth"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+maxio-common = { workspace = true }
+hmac = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+base64 = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+percent-encoding = { workspace = true }
+http = { workspace = true }

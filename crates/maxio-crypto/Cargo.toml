@@ -1,0 +1,10 @@
+[package]
+name = "maxio-crypto"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+maxio-common = { workspace = true }
+ring = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }

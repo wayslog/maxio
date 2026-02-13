@@ -1,6 +1,85 @@
-[package]
-name = "maxio"
+[workspace]
+resolver = "2"
+members = [
+    "crates/maxio-server",
+    "crates/maxio-s3-api",
+    "crates/maxio-storage",
+    "crates/maxio-iam",
+    "crates/maxio-auth",
+    "crates/maxio-crypto",
+    "crates/maxio-distributed",
+    "crates/maxio-notification",
+    "crates/maxio-lifecycle",
+    "crates/maxio-admin",
+    "crates/maxio-common",
+]
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
+license = "AGPL-3.0"
+repository = "https://github.com/maxio-io/maxio"
 
-[dependencies]
+[workspace.dependencies]
+# Internal crates
+maxio-common = { path = "crates/maxio-common" }
+maxio-storage = { path = "crates/maxio-storage" }
+maxio-s3-api = { path = "crates/maxio-s3-api" }
+maxio-iam = { path = "crates/maxio-iam" }
+maxio-auth = { path = "crates/maxio-auth" }
+maxio-crypto = { path = "crates/maxio-crypto" }
+maxio-distributed = { path = "crates/maxio-distributed" }
+maxio-notification = { path = "crates/maxio-notification" }
+maxio-lifecycle = { path = "crates/maxio-lifecycle" }
+maxio-admin = { path = "crates/maxio-admin" }
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# HTTP / Web
+hyper = { version = "1", features = ["full"] }
+hyper-util = { version = "0.1", features = ["full"] }
+http = "1"
+http-body-util = "0.1"
+axum = { version = "0.8", features = ["macros"] }
+tower = { version = "0.5", features = ["full"] }
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+quick-xml = { version = "0.37", features = ["serialize"] }
+rmp-serde = "1"
+
+# Crypto / Hashing
+ring = "0.17"
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+md-5 = "0.10"
+base64 = "0.22"
+uuid = { version = "1", features = ["v4"] }
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Logging / Tracing
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Async utilities
+async-trait = "0.1"
+futures = "0.3"
+bytes = "1"
+pin-project-lite = "0.2"
+
+# Misc
+percent-encoding = "2"
+url = "2"

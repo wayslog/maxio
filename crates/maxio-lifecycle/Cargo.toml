@@ -1,0 +1,13 @@
+[package]
+name = "maxio-lifecycle"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+maxio-common = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+quick-xml = { workspace = true }

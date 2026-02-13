@@ -1,0 +1,18 @@
+[package]
+name = "maxio-server"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "maxio"
+path = "src/main.rs"
+
+[dependencies]
+maxio-common = { workspace = true }
+maxio-s3-api = { workspace = true }
+maxio-storage = { workspace = true }
+tokio = { workspace = true }
+axum = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+clap = { workspace = true }

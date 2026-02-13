@@ -1,0 +1,19 @@
+[package]
+name = "maxio-storage"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+maxio-common = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+async-trait = { workspace = true }
+bytes = { workspace = true, features = ["serde"] }
+chrono = { workspace = true }
+uuid = { workspace = true }
+rmp-serde = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+futures = { workspace = true }
+serde_json = { workspace = true }
+md-5 = { workspace = true }

@@ -1,0 +1,69 @@
+    Blocking waiting for file lock on package cache
+   0.208265875s  INFO prepare_target{force=false package_id=maxio-s3-api v0.1.0 (/Users/xuesong.zhao/repo/rust/maxio/crates/maxio-s3-api) target="maxio_s3_api"}: cargo::core::compiler::fingerprint: stale: changed "/Users/xuesong.zhao/repo/rust/maxio/crates/maxio-storage/src/traits.rs"
+   0.208282000s  INFO prepare_target{force=false package_id=maxio-s3-api v0.1.0 (/Users/xuesong.zhao/repo/rust/maxio/crates/maxio-s3-api) target="maxio_s3_api"}: cargo::core::compiler::fingerprint:           (vs) "/Users/xuesong.zhao/repo/rust/maxio/target/debug/.fingerprint/maxio-storage-a7e437cf7bc5fe78/dep-lib-maxio_storage"
+   0.208285166s  INFO prepare_target{force=false package_id=maxio-s3-api v0.1.0 (/Users/xuesong.zhao/repo/rust/maxio/crates/maxio-s3-api) target="maxio_s3_api"}: cargo::core::compiler::fingerprint:                FileTime { seconds: 1770951947, nanos: 632615612 } < FileTime { seconds: 1770952235, nanos: 720609589 }
+   0.209414166s  INFO prepare_target{force=false package_id=maxio-s3-api v0.1.0 (/Users/xuesong.zhao/repo/rust/maxio/crates/maxio-s3-api) target="maxio_s3_api"}: cargo::core::compiler::fingerprint: fingerprint dirty for maxio-s3-api v0.1.0 (/Users/xuesong.zhao/repo/rust/maxio/crates/maxio-s3-api)/Check { test: false }/TargetInner { name_inferred: true, ..: lib_target("maxio_s3_api", ["lib"], "/Users/xuesong.zhao/repo/rust/maxio/crates/maxio-s3-api/src/lib.rs", Edition2024) }
+   0.209436083s  INFO prepare_target{force=false package_id=maxio-s3-api v0.1.0 (/Users/xuesong.zhao/repo/rust/maxio/crates/maxio-s3-api) target="maxio_s3_api"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleDepFingerprint { name: "maxio_storage" })
+   0.211292166s  INFO prepare_target{force=false package_id=maxio-storage v0.1.0 (/Users/xuesong.zhao/repo/rust/maxio/crates/maxio-storage) target="maxio_storage"}: cargo::core::compiler::fingerprint: fingerprint dirty for maxio-storage v0.1.0 (/Users/xuesong.zhao/repo/rust/maxio/crates/maxio-storage)/Check { test: false }/TargetInner { name_inferred: true, ..: lib_target("maxio_storage", ["lib"], "/Users/xuesong.zhao/repo/rust/maxio/crates/maxio-storage/src/lib.rs", Edition2024) }
+   0.211303833s  INFO prepare_target{force=false package_id=maxio-storage v0.1.0 (/Users/xuesong.zhao/repo/rust/maxio/crates/maxio-storage) target="maxio_storage"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleItem(ChangedFile { reference: "/Users/xuesong.zhao/repo/rust/maxio/target/debug/.fingerprint/maxio-storage-a7e437cf7bc5fe78/dep-lib-maxio_storage", reference_mtime: FileTime { seconds: 1770951947, nanos: 632615612 }, stale: "/Users/xuesong.zhao/repo/rust/maxio/crates/maxio-storage/src/traits.rs", stale_mtime: FileTime { seconds: 1770952235, nanos: 720609589 } }))
+   0.213008333s  INFO prepare_target{force=false package_id=maxio-s3-api v0.1.0 (/Users/xuesong.zhao/repo/rust/maxio/crates/maxio-s3-api) target="maxio_s3_api"}: cargo::core::compiler::fingerprint: fingerprint dirty for maxio-s3-api v0.1.0 (/Users/xuesong.zhao/repo/rust/maxio/crates/maxio-s3-api)/Check { test: true }/TargetInner { name_inferred: true, ..: lib_target("maxio_s3_api", ["lib"], "/Users/xuesong.zhao/repo/rust/maxio/crates/maxio-s3-api/src/lib.rs", Edition2024) }
+   0.213016333s  INFO prepare_target{force=false package_id=maxio-s3-api v0.1.0 (/Users/xuesong.zhao/repo/rust/maxio/crates/maxio-s3-api) target="maxio_s3_api"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleDepFingerprint { name: "maxio_storage" })
+   0.217927583s  INFO prepare_target{force=false package_id=maxio-server v0.1.0 (/Users/xuesong.zhao/repo/rust/maxio/crates/maxio-server) target="maxio"}: cargo::core::compiler::fingerprint: fingerprint error for maxio-server v0.1.0 (/Users/xuesong.zhao/repo/rust/maxio/crates/maxio-server)/Check { test: false }/TargetInner { name: "maxio", doc: true, ..: with_path("/Users/xuesong.zhao/repo/rust/maxio/crates/maxio-server/src/main.rs", Edition2024) }
+   0.217943041s  INFO prepare_target{force=false package_id=maxio-server v0.1.0 (/Users/xuesong.zhao/repo/rust/maxio/crates/maxio-server) target="maxio"}: cargo::core::compiler::fingerprint:     err: failed to read `/Users/xuesong.zhao/repo/rust/maxio/target/debug/.fingerprint/maxio-server-8b3e366582ca4121/bin-maxio`
+
+Caused by:
+    No such file or directory (os error 2)
+
+Stack backtrace:
+   0: std::backtrace::Backtrace::create
+   1: std::backtrace::Backtrace::capture
+   2: cargo_util::paths::read_bytes
+   3: cargo_util::paths::read
+   4: cargo::core::compiler::fingerprint::_compare_old_fingerprint
+   5: cargo::core::compiler::fingerprint::prepare_target
+   6: cargo::core::compiler::compile
+   7: <cargo::core::compiler::build_runner::BuildRunner>::compile
+   8: cargo::ops::cargo_compile::compile_ws
+   9: cargo::ops::cargo_compile::compile_with_exec
+  10: cargo::ops::cargo_compile::compile
+  11: cargo::commands::check::exec
+  12: <cargo::cli::Exec>::exec
+  13: cargo::main
+  14: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+  15: std::rt::lang_start::<()>::{closure#0}
+  16: std::rt::lang_start_internal
+  17: _main
+   0.237105541s  INFO prepare_target{force=false package_id=maxio-server v0.1.0 (/Users/xuesong.zhao/repo/rust/maxio/crates/maxio-server) target="maxio"}: cargo::core::compiler::fingerprint: fingerprint error for maxio-server v0.1.0 (/Users/xuesong.zhao/repo/rust/maxio/crates/maxio-server)/Check { test: true }/TargetInner { name: "maxio", doc: true, ..: with_path("/Users/xuesong.zhao/repo/rust/maxio/crates/maxio-server/src/main.rs", Edition2024) }
+   0.237119000s  INFO prepare_target{force=false package_id=maxio-server v0.1.0 (/Users/xuesong.zhao/repo/rust/maxio/crates/maxio-server) target="maxio"}: cargo::core::compiler::fingerprint:     err: failed to read `/Users/xuesong.zhao/repo/rust/maxio/target/debug/.fingerprint/maxio-server-0b9652a3be5b3fe1/test-bin-maxio`
+
+Caused by:
+    No such file or directory (os error 2)
+
+Stack backtrace:
+   0: std::backtrace::Backtrace::create
+   1: std::backtrace::Backtrace::capture
+   2: cargo_util::paths::read_bytes
+   3: cargo_util::paths::read
+   4: cargo::core::compiler::fingerprint::_compare_old_fingerprint
+   5: cargo::core::compiler::fingerprint::prepare_target
+   6: cargo::core::compiler::compile
+   7: <cargo::core::compiler::build_runner::BuildRunner>::compile
+   8: cargo::ops::cargo_compile::compile_ws
+   9: cargo::ops::cargo_compile::compile_with_exec
+  10: cargo::ops::cargo_compile::compile
+  11: cargo::commands::check::exec
+  12: <cargo::cli::Exec>::exec
+  13: cargo::main
+  14: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+  15: std::rt::lang_start::<()>::{closure#0}
+  16: std::rt::lang_start_internal
+  17: _main
+   0.237806625s  INFO prepare_target{force=false package_id=maxio-storage v0.1.0 (/Users/xuesong.zhao/repo/rust/maxio/crates/maxio-storage) target="maxio_storage"}: cargo::core::compiler::fingerprint: stale: changed "/Users/xuesong.zhao/repo/rust/maxio/crates/maxio-storage/src/traits.rs"
+   0.237810625s  INFO prepare_target{force=false package_id=maxio-storage v0.1.0 (/Users/xuesong.zhao/repo/rust/maxio/crates/maxio-storage) target="maxio_storage"}: cargo::core::compiler::fingerprint:           (vs) "/Users/xuesong.zhao/repo/rust/maxio/target/debug/.fingerprint/maxio-storage-76ec0078f34d5c21/dep-test-lib-maxio_storage"
+   0.237812625s  INFO prepare_target{force=false package_id=maxio-storage v0.1.0 (/Users/xuesong.zhao/repo/rust/maxio/crates/maxio-storage) target="maxio_storage"}: cargo::core::compiler::fingerprint:                FileTime { seconds: 1770951954, nanos: 966790570 } < FileTime { seconds: 1770952235, nanos: 720609589 }
+   0.238119583s  INFO prepare_target{force=false package_id=maxio-storage v0.1.0 (/Users/xuesong.zhao/repo/rust/maxio/crates/maxio-storage) target="maxio_storage"}: cargo::core::compiler::fingerprint: fingerprint dirty for maxio-storage v0.1.0 (/Users/xuesong.zhao/repo/rust/maxio/crates/maxio-storage)/Check { test: true }/TargetInner { name_inferred: true, ..: lib_target("maxio_storage", ["lib"], "/Users/xuesong.zhao/repo/rust/maxio/crates/maxio-storage/src/lib.rs", Edition2024) }
+   0.238126541s  INFO prepare_target{force=false package_id=maxio-storage v0.1.0 (/Users/xuesong.zhao/repo/rust/maxio/crates/maxio-storage) target="maxio_storage"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleItem(ChangedFile { reference: "/Users/xuesong.zhao/repo/rust/maxio/target/debug/.fingerprint/maxio-storage-76ec0078f34d5c21/dep-test-lib-maxio_storage", reference_mtime: FileTime { seconds: 1770951954, nanos: 966790570 }, stale: "/Users/xuesong.zhao/repo/rust/maxio/crates/maxio-storage/src/traits.rs", stale_mtime: FileTime { seconds: 1770952235, nanos: 720609589 } }))
+    Checking maxio-storage v0.1.0 (/Users/xuesong.zhao/repo/rust/maxio/crates/maxio-storage)
+    Checking maxio-s3-api v0.1.0 (/Users/xuesong.zhao/repo/rust/maxio/crates/maxio-s3-api)
+    Checking maxio-server v0.1.0 (/Users/xuesong.zhao/repo/rust/maxio/crates/maxio-server)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.22s
