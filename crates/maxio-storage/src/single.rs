@@ -7,8 +7,8 @@ use maxio_common::error::Result;
 use maxio_common::types::{BucketInfo, ObjectInfo};
 
 use crate::traits::{
-    CompletePart, ListObjectsResult, MultipartUploadInfo, ObjectLayer, ObjectVersion, PartInfo,
-    VersioningState,
+    CompletePart, GetEncryptionOptions, ListObjectsResult, MultipartUploadInfo, ObjectLayer,
+    ObjectVersion, PartInfo, PutEncryptionOptions, VersioningState,
 };
 use crate::xl::storage::XlStorage;
 
@@ -57,14 +57,20 @@ impl ObjectLayer for SingleDiskObjectLayer {
         data: Bytes,
         content_type: Option<&str>,
         metadata: HashMap<String, String>,
+        encryption: Option<PutEncryptionOptions>,
     ) -> Result<ObjectInfo> {
         self.storage
-            .put_object(bucket, key, data, content_type, metadata)
+            .put_object(bucket, key, data, content_type, metadata, encryption)
             .await
     }
 
-    async fn get_object(&self, bucket: &str, key: &str) -> Result<(ObjectInfo, Bytes)> {
-        self.storage.get_object(bucket, key).await
+    async fn get_object(
+        &self,
+        bucket: &str,
+        key: &str,
+        encryption: Option<GetEncryptionOptions>,
+    ) -> Result<(ObjectInfo, Bytes)> {
+        self.storage.get_object(bucket, key, encryption).await
     }
 
     async fn get_object_version(
@@ -72,12 +78,20 @@ impl ObjectLayer for SingleDiskObjectLayer {
         bucket: &str,
         key: &str,
         version_id: &str,
+        encryption: Option<GetEncryptionOptions>,
     ) -> Result<(ObjectInfo, Bytes)> {
-        self.storage.get_object_version(bucket, key, version_id).await
+        self.storage
+            .get_object_version(bucket, key, version_id, encryption)
+            .await
     }
 
-    async fn get_object_info(&self, bucket: &str, key: &str) -> Result<ObjectInfo> {
-        self.storage.get_object_info(bucket, key).await
+    async fn get_object_info(
+        &self,
+        bucket: &str,
+        key: &str,
+        encryption: Option<GetEncryptionOptions>,
+    ) -> Result<ObjectInfo> {
+        self.storage.get_object_info(bucket, key, encryption).await
     }
 
     async fn delete_object(&self, bucket: &str, key: &str) -> Result<()> {

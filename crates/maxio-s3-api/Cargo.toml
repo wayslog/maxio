@@ -8,6 +8,8 @@ maxio-common = { workspace = true }
 maxio-auth = { workspace = true }
 maxio-iam = { workspace = true }
 maxio-storage = { workspace = true }
+base64 = { workspace = true }
+md-5 = { workspace = true }
 axum = { workspace = true }
 tokio = { workspace = true }
 hyper = { workspace = true }

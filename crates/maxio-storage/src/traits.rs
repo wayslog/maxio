@@ -55,6 +55,19 @@ pub struct ObjectVersion {
     pub size: i64,
 }
 
+#[derive(Debug, Clone)]
+pub struct PutEncryptionOptions {
+    pub sse_s3: bool,
+    pub sse_c_key: Option<[u8; 32]>,
+    pub sse_c_key_md5: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct GetEncryptionOptions {
+    pub sse_c_key: Option<[u8; 32]>,
+    pub sse_c_key_md5: Option<String>,
+}
+
 #[async_trait]
 pub trait ObjectLayer: Send + Sync {
     async fn make_bucket(&self, bucket: &str) -> Result<()>;
@@ -70,11 +83,24 @@ pub trait ObjectLayer: Send + Sync {
         data: Bytes,
         content_type: Option<&str>,
         metadata: HashMap<String, String>,
+        encryption: Option<PutEncryptionOptions>,
     ) -> Result<ObjectInfo>;
-    async fn get_object(&self, bucket: &str, key: &str) -> Result<(ObjectInfo, Bytes)>;
-    async fn get_object_version(&self, bucket: &str, key: &str, version_id: &str)
+    async fn get_object(
+        &self,
+        bucket: &str,
+        key: &str,
+        encryption: Option<GetEncryptionOptions>,
+    ) -> Result<(ObjectInfo, Bytes)>;
+    async fn get_object_version(
+        &self,
+        bucket: &str,
+        key: &str,
+        version_id: &str,
+        encryption: Option<GetEncryptionOptions>,
+    )
     -> Result<(ObjectInfo, Bytes)>;
-    async fn get_object_info(&self, bucket: &str, key: &str) -> Result<ObjectInfo>;
+    async fn get_object_info(&self, bucket: &str, key: &str, encryption: Option<GetEncryptionOptions>)
+    -> Result<ObjectInfo>;
     async fn delete_object(&self, bucket: &str, key: &str) -> Result<()>;
     async fn delete_object_version(&self, bucket: &str, key: &str, version_id: &str) -> Result<()>;
     async fn list_objects(

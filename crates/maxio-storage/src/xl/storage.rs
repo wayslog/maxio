@@ -4,17 +4,21 @@ use std::path::{Component, Path, PathBuf};
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use maxio_common::error::{MaxioError, Result};
-use maxio_common::types::{BucketInfo, ObjectInfo};
+use maxio_common::types::{BucketInfo, ObjectEncryption, ObjectInfo};
+use maxio_crypto::{MasterKey, cipher};
 use md5::{Digest, Md5};
 use serde::{Deserialize, Serialize};
 use tokio::fs;
 use uuid::Uuid;
 
 use crate::traits::{
-    CompletePart, ListObjectsResult, MultipartUploadInfo, ObjectVersion, PartInfo, VersioningState,
+    CompletePart, GetEncryptionOptions, ListObjectsResult, MultipartUploadInfo, ObjectVersion,
+    PartInfo, PutEncryptionOptions, VersioningState,
 };
 
 const SYS_DIR_NAME: &str = ".maxio.sys";
+const CRYPTO_DIR_NAME: &str = ".crypto";
+const MASTER_KEY_FILE_NAME: &str = "master.key";
 const META_FILE_NAME: &str = "xl.meta";
 const DATA_PART_FILE_NAME: &str = "part.1";
 const DEFAULT_CONTENT_TYPE: &str = "application/octet-stream";
@@ -27,6 +31,7 @@ const NULL_VERSION_ID: &str = "null";
 #[derive(Debug, Clone)]
 pub struct XlStorage {
     root_dir: PathBuf,
+    master_key: MasterKey,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -40,6 +45,14 @@ struct XlMeta {
     metadata: HashMap<String, String>,
     version_id: Option<String>,
     is_delete_marker: bool,
+    encryption: Option<EncryptionInfo>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct EncryptionInfo {
+    algorithm: String,
+    sse_type: String,
+    key_md5: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -78,7 +91,11 @@ impl XlStorage {
     pub async fn new(root_dir: PathBuf) -> Result<Self> {
         fs::create_dir_all(&root_dir).await?;
         fs::create_dir_all(root_dir.join(SYS_DIR_NAME)).await?;
-        Ok(Self { root_dir })
+        let master_key = load_or_create_master_key(&root_dir).await?;
+        Ok(Self {
+            root_dir,
+            master_key,
+        })
     }
 
     pub async fn make_bucket(&self, bucket: &str) -> Result<()> {
@@ -124,7 +141,7 @@ impl XlStorage {
             let file_name = entry.file_name();
             let name = file_name.to_string_lossy().to_string();
 
-            if name == SYS_DIR_NAME {
+            if name == SYS_DIR_NAME || name == CRYPTO_DIR_NAME {
                 continue;
             }
 
@@ -191,6 +208,7 @@ impl XlStorage {
         data: Bytes,
         content_type: Option<&str>,
         metadata: HashMap<String, String>,
+        encryption: Option<PutEncryptionOptions>,
     ) -> Result<ObjectInfo> {
         validate_bucket_name(bucket)?;
         validate_object_key(key)?;
@@ -213,6 +231,12 @@ impl XlStorage {
                 let data_dir = Uuid::new_v4().to_string();
                 let data_path = object_path.join(&data_dir);
                 fs::create_dir_all(&data_path).await?;
+                let (object_key, encryption_info) =
+                    self.resolve_put_encryption(bucket, key, None, encryption.as_ref())?;
+                let stored_data = match object_key {
+                    Some(object_key) => cipher::encrypt(&object_key, &data).map_err(map_crypto_error)?,
+                    None => data.to_vec(),
+                };
 
                 let xl_meta = XlMeta {
                     version: "1.0".to_string(),
@@ -224,9 +248,10 @@ impl XlStorage {
                     metadata: metadata.clone(),
                     version_id: None,
                     is_delete_marker: false,
+                    encryption: encryption_info,
                 };
 
-                fs::write(data_path.join(DATA_PART_FILE_NAME), data).await?;
+                fs::write(data_path.join(DATA_PART_FILE_NAME), stored_data).await?;
                 self.write_xl_meta(&object_path.join(META_FILE_NAME), &xl_meta).await?;
 
                 Ok(ObjectInfo {
@@ -238,6 +263,7 @@ impl XlStorage {
                     last_modified: mod_time,
                     metadata,
                     version_id: None,
+                    encryption: xl_meta.encryption.clone().map(meta_encryption_to_object),
                 })
             }
             VersioningState::Enabled | VersioningState::Suspended => {
@@ -259,6 +285,16 @@ impl XlStorage {
                 let version_path = object_path.join(&version_id);
                 let data_path = version_path.join(&data_dir);
                 fs::create_dir_all(&data_path).await?;
+                let (object_key, encryption_info) = self.resolve_put_encryption(
+                    bucket,
+                    key,
+                    Some(version_id.as_str()),
+                    encryption.as_ref(),
+                )?;
+                let stored_data = match object_key {
+                    Some(object_key) => cipher::encrypt(&object_key, &data).map_err(map_crypto_error)?,
+                    None => data.to_vec(),
+                };
 
                 let xl_meta = XlMeta {
                     version: "1.0".to_string(),
@@ -270,9 +306,10 @@ impl XlStorage {
                     metadata: metadata.clone(),
                     version_id: Some(version_id.clone()),
                     is_delete_marker: false,
+                    encryption: encryption_info,
                 };
 
-                fs::write(data_path.join(DATA_PART_FILE_NAME), data).await?;
+                fs::write(data_path.join(DATA_PART_FILE_NAME), stored_data).await?;
                 self.write_xl_meta(&version_path.join(META_FILE_NAME), &xl_meta)
                     .await?;
 
@@ -297,12 +334,18 @@ impl XlStorage {
                     last_modified: mod_time,
                     metadata,
                     version_id: Some(version_id),
+                    encryption: xl_meta.encryption.clone().map(meta_encryption_to_object),
                 })
             }
         }
     }
 
-    pub async fn get_object(&self, bucket: &str, key: &str) -> Result<(ObjectInfo, Bytes)> {
+    pub async fn get_object(
+        &self,
+        bucket: &str,
+        key: &str,
+        encryption: Option<GetEncryptionOptions>,
+    ) -> Result<(ObjectInfo, Bytes)> {
         let state = self.read_bucket_versioning(bucket).await?;
         if state == VersioningState::Unversioned {
             let (object_info, xl_meta, object_path) = self.read_object(bucket, key).await?;
@@ -313,7 +356,15 @@ impl XlStorage {
                     bucket: bucket.to_string(),
                     key: key.to_string(),
                 })?;
-            return Ok((object_info, Bytes::from(data)));
+            let plain = self.decrypt_object_data(
+                bucket,
+                key,
+                None,
+                xl_meta.encryption.as_ref(),
+                &data,
+                encryption.as_ref(),
+            )?;
+            return Ok((object_info, Bytes::from(plain)));
         }
 
         let versions = self.ensure_versions_index(bucket, key).await?;
@@ -322,7 +373,9 @@ impl XlStorage {
                 continue;
             }
 
-            return self.get_object_version(bucket, key, &entry.version_id).await;
+            return self
+                .get_object_version(bucket, key, &entry.version_id, encryption)
+                .await;
         }
 
         Err(MaxioError::ObjectNotFound {
@@ -336,6 +389,7 @@ impl XlStorage {
         bucket: &str,
         key: &str,
         version_id: &str,
+        encryption: Option<GetEncryptionOptions>,
     ) -> Result<(ObjectInfo, Bytes)> {
         validate_bucket_name(bucket)?;
         validate_object_key(key)?;
@@ -357,11 +411,25 @@ impl XlStorage {
                 key: key.to_string(),
             })?;
 
-        Ok((object_info, Bytes::from(data)))
+        let plain = self.decrypt_object_data(
+            bucket,
+            key,
+            Some(version_id),
+            xl_meta.encryption.as_ref(),
+            &data,
+            encryption.as_ref(),
+        )?;
+
+        Ok((object_info, Bytes::from(plain)))
     }
 
-    pub async fn get_object_info(&self, bucket: &str, key: &str) -> Result<ObjectInfo> {
-        let (object_info, _) = self.get_object(bucket, key).await?;
+    pub async fn get_object_info(
+        &self,
+        bucket: &str,
+        key: &str,
+        encryption: Option<GetEncryptionOptions>,
+    ) -> Result<ObjectInfo> {
+        let (object_info, _) = self.get_object(bucket, key, encryption).await?;
         Ok(object_info)
     }
 
@@ -406,6 +474,7 @@ impl XlStorage {
             metadata: HashMap::new(),
             version_id: Some(version_id.clone()),
             is_delete_marker: true,
+            encryption: None,
         };
         let marker_path = object_path.join(&version_id);
         fs::create_dir_all(&marker_path).await?;
@@ -768,6 +837,7 @@ impl XlStorage {
                 Bytes::from(output),
                 Some(&content_type),
                 upload_meta.metadata.clone(),
+                None,
             )
             .await?;
         self.update_object_etag(bucket, key, object_info.version_id.as_deref(), &final_etag)
@@ -982,6 +1052,111 @@ impl XlStorage {
             last_modified: xl_meta.mod_time,
             metadata: xl_meta.metadata.clone(),
             version_id: xl_meta.version_id.clone(),
+            encryption: xl_meta.encryption.clone().map(meta_encryption_to_object),
+        }
+    }
+
+    fn resolve_put_encryption(
+        &self,
+        bucket: &str,
+        key: &str,
+        version_id: Option<&str>,
+        encryption: Option<&PutEncryptionOptions>,
+    ) -> Result<(Option<[u8; 32]>, Option<EncryptionInfo>)> {
+        let Some(encryption) = encryption else {
+            return Ok((None, None));
+        };
+
+        if let Some(customer_key) = encryption.sse_c_key {
+            let key_md5 = encryption.sse_c_key_md5.clone().ok_or_else(|| {
+                MaxioError::InvalidArgument(
+                    "missing SSE-C key MD5 for encrypted put request".to_string(),
+                )
+            })?;
+
+            return Ok((
+                Some(customer_key),
+                Some(EncryptionInfo {
+                    algorithm: "AES256".to_string(),
+                    sse_type: "SSE-C".to_string(),
+                    key_md5: Some(key_md5),
+                }),
+            ));
+        }
+
+        if encryption.sse_s3 {
+            return Ok((
+                Some(self.master_key.derive_object_key(bucket, key, version_id)),
+                Some(EncryptionInfo {
+                    algorithm: "AES256".to_string(),
+                    sse_type: "SSE-S3".to_string(),
+                    key_md5: None,
+                }),
+            ));
+        }
+
+        Ok((None, None))
+    }
+
+    fn decrypt_object_data(
+        &self,
+        bucket: &str,
+        key: &str,
+        version_id: Option<&str>,
+        encryption_info: Option<&EncryptionInfo>,
+        stored_data: &[u8],
+        request_encryption: Option<&GetEncryptionOptions>,
+    ) -> Result<Vec<u8>> {
+        let Some(encryption_info) = encryption_info else {
+            return Ok(stored_data.to_vec());
+        };
+
+        match encryption_info.sse_type.as_str() {
+            "SSE-S3" => {
+                let object_key = self.master_key.derive_object_key(bucket, key, version_id);
+                match cipher::decrypt(&object_key, stored_data) {
+                    Ok(data) => Ok(data),
+                    Err(err) if version_id == Some(NULL_VERSION_ID) => {
+                        let fallback_key = self.master_key.derive_object_key(bucket, key, None);
+                        cipher::decrypt(&fallback_key, stored_data)
+                            .map_err(|_| map_crypto_error(err))
+                    }
+                    Err(err) => Err(map_crypto_error(err)),
+                }
+            }
+            "SSE-C" => {
+                let request_encryption = request_encryption.ok_or_else(|| {
+                    MaxioError::InvalidArgument(
+                        "missing SSE-C headers for encrypted object access".to_string(),
+                    )
+                })?;
+                let customer_key = request_encryption.sse_c_key.ok_or_else(|| {
+                    MaxioError::InvalidArgument(
+                        "missing SSE-C customer key for encrypted object access".to_string(),
+                    )
+                })?;
+                let request_md5 = request_encryption.sse_c_key_md5.clone().ok_or_else(|| {
+                    MaxioError::InvalidArgument(
+                        "missing SSE-C customer key MD5 for encrypted object access".to_string(),
+                    )
+                })?;
+                let expected_md5 = encryption_info.key_md5.clone().ok_or_else(|| {
+                    MaxioError::InternalError(
+                        "encrypted object metadata missing SSE-C key md5".to_string(),
+                    )
+                })?;
+
+                if request_md5 != expected_md5 {
+                    return Err(MaxioError::AccessDenied(
+                        "SSE-C customer key MD5 mismatch".to_string(),
+                    ));
+                }
+
+                cipher::decrypt(&customer_key, stored_data).map_err(map_crypto_error)
+            }
+            other => Err(MaxioError::InternalError(format!(
+                "unsupported encryption type in metadata: {other}"
+            ))),
         }
     }
 
@@ -1248,10 +1423,44 @@ impl XlStorage {
 }
 
 fn validate_bucket_name(bucket: &str) -> Result<()> {
-    if bucket.is_empty() || bucket == SYS_DIR_NAME || bucket.contains('/') || bucket.contains('\\') {
+    if bucket.is_empty()
+        || bucket == SYS_DIR_NAME
+        || bucket == CRYPTO_DIR_NAME
+        || bucket.contains('/')
+        || bucket.contains('\\')
+    {
         return Err(MaxioError::InvalidBucketName(bucket.to_string()));
     }
     Ok(())
+}
+
+fn meta_encryption_to_object(value: EncryptionInfo) -> ObjectEncryption {
+    ObjectEncryption {
+        algorithm: value.algorithm,
+        sse_type: value.sse_type,
+        key_md5: value.key_md5,
+    }
+}
+
+fn map_crypto_error(err: maxio_crypto::CryptoError) -> MaxioError {
+    MaxioError::InternalError(format!("crypto operation failed: {err}"))
+}
+
+async fn load_or_create_master_key(root_dir: &Path) -> Result<MasterKey> {
+    let crypto_dir = root_dir.join(CRYPTO_DIR_NAME);
+    fs::create_dir_all(&crypto_dir).await?;
+    let key_path = crypto_dir.join(MASTER_KEY_FILE_NAME);
+
+    match fs::read(&key_path).await {
+        Ok(bytes) => MasterKey::from_bytes(&bytes)
+            .map_err(|err| MaxioError::InternalError(format!("invalid master key file: {err}"))),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            let key = MasterKey::generate();
+            fs::write(&key_path, key.as_bytes()).await?;
+            Ok(key)
+        }
+        Err(err) => Err(MaxioError::Io(err)),
+    }
 }
 
 fn validate_object_key(key: &str) -> Result<()> {

@@ -16,8 +16,8 @@ use md5::Digest as _;
 use crate::erasure::{ErasureConfig, ErasureInfo, decode_block, encode_block};
 use crate::erasure::storage::ErasureStorage;
 use crate::traits::{
-    CompletePart, ListObjectsResult, MultipartUploadInfo, ObjectLayer, ObjectVersion, PartInfo,
-    VersioningState,
+    CompletePart, GetEncryptionOptions, ListObjectsResult, MultipartUploadInfo, ObjectLayer,
+    ObjectVersion, PartInfo, PutEncryptionOptions, VersioningState,
 };
 
 const META_FILE_NAME: &str = "xl.meta";
@@ -149,6 +149,7 @@ impl ErasureObjectLayer {
             last_modified: meta.mod_time,
             metadata: meta.metadata.clone(),
             version_id: None,
+            encryption: None,
         }
     }
 }
@@ -275,7 +276,13 @@ impl ObjectLayer for ErasureObjectLayer {
         data: Bytes,
         content_type: Option<&str>,
         metadata: HashMap<String, String>,
+        encryption: Option<PutEncryptionOptions>,
     ) -> Result<ObjectInfo> {
+        if encryption.is_some() {
+            return Err(MaxioError::NotImplemented(
+                "SSE is not implemented for erasure mode".to_string(),
+            ));
+        }
         validate_bucket_name(bucket)?;
         validate_object_key(key)?;
         self.ensure_bucket_exists_for_quorum(bucket).await?;
@@ -368,10 +375,21 @@ impl ObjectLayer for ErasureObjectLayer {
             last_modified: mod_time,
             metadata,
             version_id: None,
+            encryption: None,
         })
     }
 
-    async fn get_object(&self, bucket: &str, key: &str) -> Result<(ObjectInfo, Bytes)> {
+    async fn get_object(
+        &self,
+        bucket: &str,
+        key: &str,
+        encryption: Option<GetEncryptionOptions>,
+    ) -> Result<(ObjectInfo, Bytes)> {
+        if encryption.is_some() {
+            return Err(MaxioError::NotImplemented(
+                "SSE is not implemented for erasure mode".to_string(),
+            ));
+        }
         validate_bucket_name(bucket)?;
         validate_object_key(key)?;
 
@@ -464,6 +482,7 @@ impl ObjectLayer for ErasureObjectLayer {
         bucket: &str,
         key: &str,
         version_id: &str,
+        encryption: Option<GetEncryptionOptions>,
     ) -> Result<(ObjectInfo, Bytes)> {
         validate_bucket_name(bucket)?;
         validate_object_key(key)?;
@@ -471,10 +490,22 @@ impl ObjectLayer for ErasureObjectLayer {
         let staging = self.storage.shard_storage(0).ok_or_else(|| {
             MaxioError::InternalError("missing shard 0 for versioning operations".to_string())
         })?;
-        staging.get_object_version(bucket, key, version_id).await
+        staging
+            .get_object_version(bucket, key, version_id, encryption)
+            .await
     }
 
-    async fn get_object_info(&self, bucket: &str, key: &str) -> Result<ObjectInfo> {
+    async fn get_object_info(
+        &self,
+        bucket: &str,
+        key: &str,
+        encryption: Option<GetEncryptionOptions>,
+    ) -> Result<ObjectInfo> {
+        if encryption.is_some() {
+            return Err(MaxioError::NotImplemented(
+                "SSE is not implemented for erasure mode".to_string(),
+            ));
+        }
         validate_bucket_name(bucket)?;
         validate_object_key(key)?;
 
@@ -616,12 +647,12 @@ impl ObjectLayer for ErasureObjectLayer {
         let staged_info = staging
             .complete_multipart_upload(bucket, key, upload_id, parts)
             .await?;
-        let (_, staged_data) = staging.get_object(bucket, key).await?;
+        let (_, staged_data) = staging.get_object(bucket, key, None).await?;
 
         let content_type = staged_info.content_type.clone();
         let metadata = staged_info.metadata.clone();
         let mut finalized = self
-            .put_object(bucket, key, staged_data, Some(&content_type), metadata)
+            .put_object(bucket, key, staged_data, Some(&content_type), metadata, None)
             .await?;
 
         let mut meta = self.read_meta_from_any(bucket, key).await?;

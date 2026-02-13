@@ -9,17 +9,26 @@ use axum::{
     },
     response::{IntoResponse, Response},
 };
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+use md5::{Digest, Md5};
 use maxio_common::{
     error::MaxioError,
-    types::ObjectInfo,
+    types::{ObjectEncryption, ObjectInfo},
 };
-use maxio_storage::traits::{ListObjectsResult, ObjectLayer, VersioningState};
+use maxio_storage::traits::{
+    GetEncryptionOptions, ListObjectsResult, ObjectLayer, PutEncryptionOptions, VersioningState,
+};
 use quick_xml::se::to_string as xml_to_string;
 use serde::Serialize;
 
 use crate::error::S3Error;
 
 type S3Result = std::result::Result<Response, S3Error>;
+
+const SSE_HEADER: &str = "x-amz-server-side-encryption";
+const SSE_C_ALGORITHM_HEADER: &str = "x-amz-server-side-encryption-customer-algorithm";
+const SSE_C_KEY_HEADER: &str = "x-amz-server-side-encryption-customer-key";
+const SSE_C_KEY_MD5_HEADER: &str = "x-amz-server-side-encryption-customer-key-md5";
 
 #[derive(Debug, Serialize)]
 #[serde(rename = "ListBucketResult")]
@@ -125,6 +134,27 @@ fn write_object_headers(
         headers.insert(header_name, header_value(value)?);
     }
 
+    if let Some(encryption) = info.encryption.as_ref() {
+        write_encryption_response_headers(headers, encryption)?;
+    }
+
+    Ok(())
+}
+
+fn write_encryption_response_headers(
+    headers: &mut HeaderMap,
+    encryption: &ObjectEncryption,
+) -> std::result::Result<(), MaxioError> {
+    headers.insert(SSE_HEADER, header_value(&encryption.algorithm)?);
+    if encryption.sse_type == "SSE-C" {
+        headers.insert(
+            SSE_C_ALGORITHM_HEADER,
+            header_value(&encryption.algorithm)?,
+        );
+        if let Some(key_md5) = encryption.key_md5.as_deref() {
+            headers.insert(SSE_C_KEY_MD5_HEADER, header_value(key_md5)?);
+        }
+    }
     Ok(())
 }
 
@@ -169,6 +199,119 @@ fn extract_put_metadata(headers: &HeaderMap) -> HashMap<String, String> {
     metadata
 }
 
+fn parse_sse_c_headers(
+    headers: &HeaderMap,
+    require_complete_if_present: bool,
+) -> std::result::Result<Option<GetEncryptionOptions>, MaxioError> {
+    let algorithm = headers
+        .get(SSE_C_ALGORITHM_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim);
+    let key_b64 = headers
+        .get(SSE_C_KEY_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim);
+    let key_md5 = headers
+        .get(SSE_C_KEY_MD5_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim);
+
+    let any_present = algorithm.is_some() || key_b64.is_some() || key_md5.is_some();
+    if !any_present {
+        return Ok(None);
+    }
+
+    if require_complete_if_present
+        && (algorithm.is_none() || key_b64.is_none() || key_md5.is_none())
+    {
+        return Err(MaxioError::InvalidArgument(
+            "incomplete SSE-C headers".to_string(),
+        ));
+    }
+
+    let algorithm = algorithm.ok_or_else(|| {
+        MaxioError::InvalidArgument("missing SSE-C algorithm header".to_string())
+    })?;
+    if algorithm != "AES256" {
+        return Err(MaxioError::InvalidArgument(
+            "unsupported SSE-C algorithm".to_string(),
+        ));
+    }
+
+    let key_b64 = key_b64
+        .ok_or_else(|| MaxioError::InvalidArgument("missing SSE-C customer key".to_string()))?;
+    let key_md5 = key_md5.ok_or_else(|| {
+        MaxioError::InvalidArgument("missing SSE-C customer key MD5".to_string())
+    })?;
+
+    let key_bytes = BASE64_STANDARD.decode(key_b64).map_err(|_| {
+        MaxioError::InvalidArgument("invalid base64 SSE-C customer key".to_string())
+    })?;
+    if key_bytes.len() != 32 {
+        return Err(MaxioError::InvalidArgument(
+            "SSE-C customer key must be 256-bit".to_string(),
+        ));
+    }
+
+    let computed_md5 = BASE64_STANDARD.encode(Md5::digest(&key_bytes));
+    if computed_md5 != key_md5 {
+        return Err(MaxioError::InvalidArgument(
+            "SSE-C customer key MD5 mismatch".to_string(),
+        ));
+    }
+
+    let mut customer_key = [0_u8; 32];
+    customer_key.copy_from_slice(&key_bytes);
+    Ok(Some(GetEncryptionOptions {
+        sse_c_key: Some(customer_key),
+        sse_c_key_md5: Some(key_md5.to_string()),
+    }))
+}
+
+fn parse_put_encryption(headers: &HeaderMap) -> std::result::Result<Option<PutEncryptionOptions>, MaxioError> {
+    let sse_s3 = headers
+        .get(SSE_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .map(|value| value == "AES256")
+        .unwrap_or(false);
+
+    if headers
+        .get(SSE_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.trim() != "AES256")
+    {
+        return Err(MaxioError::InvalidArgument(
+            "unsupported x-amz-server-side-encryption algorithm".to_string(),
+        ));
+    }
+
+    let sse_c = parse_sse_c_headers(headers, true)?;
+    if sse_s3 && sse_c.is_some() {
+        return Err(MaxioError::InvalidArgument(
+            "SSE-S3 and SSE-C cannot be used together".to_string(),
+        ));
+    }
+
+    if let Some(sse_c) = sse_c {
+        return Ok(Some(PutEncryptionOptions {
+            sse_s3: false,
+            sse_c_key: sse_c.sse_c_key,
+            sse_c_key_md5: sse_c.sse_c_key_md5,
+        }));
+    }
+
+    if sse_s3 {
+        return Ok(Some(PutEncryptionOptions {
+            sse_s3: true,
+            sse_c_key: None,
+            sse_c_key_md5: None,
+        }));
+    }
+
+    Ok(None)
+}
+
 pub async fn put_object(
     State(store): State<Arc<dyn ObjectLayer>>,
     Path((bucket, key)): Path<(String, String)>,
@@ -179,12 +322,16 @@ pub async fn put_object(
         .get(CONTENT_TYPE)
         .and_then(|value| value.to_str().ok());
     let metadata = extract_put_metadata(&headers);
+    let encryption = parse_put_encryption(&headers)?;
     let info = store
-        .put_object(&bucket, &key, body, content_type, metadata)
+        .put_object(&bucket, &key, body, content_type, metadata, encryption)
         .await?;
 
     let mut response_headers = HeaderMap::new();
     response_headers.insert(ETAG, header_value(&quoted_etag(&info.etag))?);
+    if let Some(encryption) = info.encryption.as_ref() {
+        write_encryption_response_headers(&mut response_headers, encryption)?;
+    }
     Ok((StatusCode::OK, response_headers).into_response())
 }
 
@@ -195,9 +342,14 @@ pub async fn get_object(
     headers: HeaderMap,
 ) -> S3Result {
     let version_id = query.get("versionId").cloned().filter(|item| !item.is_empty());
+    let encryption = parse_sse_c_headers(&headers, false)?;
     let (info, data) = match version_id.as_deref() {
-        Some(version_id) => store.get_object_version(&bucket, &key, version_id).await?,
-        None => store.get_object(&bucket, &key).await?,
+        Some(version_id) => {
+            store
+                .get_object_version(&bucket, &key, version_id, encryption.clone())
+                .await?
+        }
+        None => store.get_object(&bucket, &key, encryption).await?,
     };
     let total_len = data.len();
 
@@ -265,8 +417,10 @@ fn parse_range_header(header: &str, total_len: usize) -> Option<(usize, usize)> 
 pub async fn head_object(
     State(store): State<Arc<dyn ObjectLayer>>,
     Path((bucket, key)): Path<(String, String)>,
+    headers: HeaderMap,
 ) -> S3Result {
-    let info = store.get_object_info(&bucket, &key).await?;
+    let encryption = parse_sse_c_headers(&headers, false)?;
+    let info = store.get_object_info(&bucket, &key, encryption).await?;
     let mut response = Response::new(Body::empty());
     *response.status_mut() = StatusCode::OK;
     let content_len = if info.size >= 0 { info.size as usize } else { 0 };

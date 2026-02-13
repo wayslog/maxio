@@ -4,7 +4,9 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-maxio-common = { workspace = true }
-ring = { workspace = true }
+aes-gcm = "0.10"
+rand = "0.8"
+sha2 = "0.10"
+base64 = "0.22"
+hkdf = "0.12"
 thiserror = { workspace = true }
-serde = { workspace = true }

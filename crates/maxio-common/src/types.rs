@@ -4,6 +4,13 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ObjectEncryption {
+    pub algorithm: String,
+    pub sse_type: String,
+    pub key_md5: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BucketInfo {
     pub name: String,
     pub created: DateTime<Utc>,
@@ -19,4 +26,5 @@ pub struct ObjectInfo {
     pub last_modified: DateTime<Utc>,
     pub metadata: HashMap<String, String>,
     pub version_id: Option<String>,
+    pub encryption: Option<ObjectEncryption>,
 }
