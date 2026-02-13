@@ -28,7 +28,10 @@ impl IamStore {
     pub async fn save_user(&self, user: &User) -> Result<()> {
         let path = self.user_path(&user.access_key);
         let data = serde_json::to_vec_pretty(user).map_err(|err| {
-            MaxioError::InternalError(format!("failed to serialize user {}: {err}", user.access_key))
+            MaxioError::InternalError(format!(
+                "failed to serialize user {}: {err}",
+                user.access_key
+            ))
         })?;
         fs::write(path, data).await?;
         Ok(())

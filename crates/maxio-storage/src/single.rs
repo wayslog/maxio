@@ -166,7 +166,9 @@ impl ObjectLayer for SingleDiskObjectLayer {
     }
 
     async fn abort_multipart_upload(&self, bucket: &str, key: &str, upload_id: &str) -> Result<()> {
-        self.storage.abort_multipart_upload(bucket, key, upload_id).await
+        self.storage
+            .abort_multipart_upload(bucket, key, upload_id)
+            .await
     }
 
     async fn list_parts(&self, bucket: &str, key: &str, upload_id: &str) -> Result<Vec<PartInfo>> {

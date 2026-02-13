@@ -68,7 +68,8 @@ impl IAMSys {
         };
 
         self.store.save_user(&user).await?;
-        self.users_write()?.insert(user.access_key.clone(), user.clone());
+        self.users_write()?
+            .insert(user.access_key.clone(), user.clone());
         Ok(user)
     }
 
@@ -113,7 +114,11 @@ impl IAMSys {
         {
             let mut users = self.users_write()?;
             for user in users.values_mut() {
-                if user.policy_names.iter().any(|policy_name| policy_name == name) {
+                if user
+                    .policy_names
+                    .iter()
+                    .any(|policy_name| policy_name == name)
+                {
                     user.policy_names.retain(|policy_name| policy_name != name);
                     updated_users.push(user.clone());
                 }
@@ -241,9 +246,7 @@ impl IAMSys {
             .map_err(|_| MaxioError::InternalError("iam policies lock poisoned".to_string()))
     }
 
-    fn policies_write(
-        &self,
-    ) -> Result<std::sync::RwLockWriteGuard<'_, HashMap<String, Policy>>> {
+    fn policies_write(&self) -> Result<std::sync::RwLockWriteGuard<'_, HashMap<String, Policy>>> {
         self.policies
             .write()
             .map_err(|_| MaxioError::InternalError("iam policies lock poisoned".to_string()))

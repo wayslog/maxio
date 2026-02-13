@@ -234,7 +234,9 @@ impl XlStorage {
                 let (object_key, encryption_info) =
                     self.resolve_put_encryption(bucket, key, None, encryption.as_ref())?;
                 let stored_data = match object_key {
-                    Some(object_key) => cipher::encrypt(&object_key, &data).map_err(map_crypto_error)?,
+                    Some(object_key) => {
+                        cipher::encrypt(&object_key, &data).map_err(map_crypto_error)?
+                    }
                     None => data.to_vec(),
                 };
 
@@ -252,7 +254,8 @@ impl XlStorage {
                 };
 
                 fs::write(data_path.join(DATA_PART_FILE_NAME), stored_data).await?;
-                self.write_xl_meta(&object_path.join(META_FILE_NAME), &xl_meta).await?;
+                self.write_xl_meta(&object_path.join(META_FILE_NAME), &xl_meta)
+                    .await?;
 
                 Ok(ObjectInfo {
                     bucket: bucket.to_string(),
@@ -278,7 +281,8 @@ impl XlStorage {
 
                 if state == VersioningState::Suspended {
                     versions.retain(|entry| entry.version_id != version_id);
-                    self.remove_version_dir_if_exists(&object_path, &version_id).await?;
+                    self.remove_version_dir_if_exists(&object_path, &version_id)
+                        .await?;
                 }
 
                 let data_dir = Uuid::new_v4().to_string();
@@ -292,7 +296,9 @@ impl XlStorage {
                     encryption.as_ref(),
                 )?;
                 let stored_data = match object_key {
-                    Some(object_key) => cipher::encrypt(&object_key, &data).map_err(map_crypto_error)?,
+                    Some(object_key) => {
+                        cipher::encrypt(&object_key, &data).map_err(map_crypto_error)?
+                    }
                     None => data.to_vec(),
                 };
 
@@ -395,7 +401,9 @@ impl XlStorage {
         validate_object_key(key)?;
         ensure_bucket_exists(self, bucket).await?;
 
-        let (object_info, xl_meta, object_path) = self.read_object_version_meta(bucket, key, version_id).await?;
+        let (object_info, xl_meta, object_path) = self
+            .read_object_version_meta(bucket, key, version_id)
+            .await?;
         if xl_meta.is_delete_marker {
             return Err(MaxioError::ObjectNotFound {
                 bucket: bucket.to_string(),
@@ -496,12 +504,19 @@ impl XlStorage {
         Ok(())
     }
 
-    pub async fn delete_object_version(&self, bucket: &str, key: &str, version_id: &str) -> Result<()> {
+    pub async fn delete_object_version(
+        &self,
+        bucket: &str,
+        key: &str,
+        version_id: &str,
+    ) -> Result<()> {
         validate_bucket_name(bucket)?;
         validate_object_key(key)?;
         ensure_bucket_exists(self, bucket).await?;
         if version_id.is_empty() {
-            return Err(MaxioError::InvalidArgument("version_id cannot be empty".to_string()));
+            return Err(MaxioError::InvalidArgument(
+                "version_id cannot be empty".to_string(),
+            ));
         }
 
         let object_path = self.object_path(bucket, key);
@@ -523,7 +538,8 @@ impl XlStorage {
             });
         }
 
-        self.remove_version_dir_if_exists(&object_path, version_id).await?;
+        self.remove_version_dir_if_exists(&object_path, version_id)
+            .await?;
         if versions.is_empty() {
             self.remove_versions_index_if_exists(&object_path).await?;
             self.cleanup_empty_parents(bucket, &object_path).await?;
@@ -555,7 +571,10 @@ impl XlStorage {
                 Err(_) => continue,
             };
             let object_key = rel.to_string_lossy().replace('\\', "/");
-            if let Some(object_info) = self.latest_visible_object(bucket, &object_key, &object_root).await? {
+            if let Some(object_info) = self
+                .latest_visible_object(bucket, &object_key, &object_root)
+                .await?
+            {
                 objects.push(object_info);
             }
         }
@@ -849,7 +868,12 @@ impl XlStorage {
         Ok(object_info)
     }
 
-    pub async fn abort_multipart_upload(&self, bucket: &str, key: &str, upload_id: &str) -> Result<()> {
+    pub async fn abort_multipart_upload(
+        &self,
+        bucket: &str,
+        key: &str,
+        upload_id: &str,
+    ) -> Result<()> {
         validate_bucket_name(bucket)?;
         validate_object_key(key)?;
         ensure_bucket_exists(self, bucket).await?;
@@ -866,7 +890,12 @@ impl XlStorage {
         Ok(())
     }
 
-    pub async fn list_parts(&self, bucket: &str, key: &str, upload_id: &str) -> Result<Vec<PartInfo>> {
+    pub async fn list_parts(
+        &self,
+        bucket: &str,
+        key: &str,
+        upload_id: &str,
+    ) -> Result<Vec<PartInfo>> {
         validate_bucket_name(bucket)?;
         validate_object_key(key)?;
         ensure_bucket_exists(self, bucket).await?;
@@ -901,7 +930,8 @@ impl XlStorage {
                 ))
             })?;
             let entry_meta = entry.metadata().await?;
-            let last_modified = filetime_to_utc(entry_meta.modified().ok()).unwrap_or_else(Utc::now);
+            let last_modified =
+                filetime_to_utc(entry_meta.modified().ok()).unwrap_or_else(Utc::now);
             let etag = format!("{:x}", Md5::digest(&bytes));
 
             parts.push(PartInfo {
@@ -975,7 +1005,11 @@ impl XlStorage {
             .join(format!("part_{part_number}"))
     }
 
-    async fn read_multipart_upload_meta(&self, bucket: &str, upload_id: &str) -> Result<MultipartUploadMeta> {
+    async fn read_multipart_upload_meta(
+        &self,
+        bucket: &str,
+        upload_id: &str,
+    ) -> Result<MultipartUploadMeta> {
         let upload_meta_path = self
             .multipart_upload_path(bucket, upload_id)
             .join(MULTIPART_META_FILE_NAME);
@@ -1166,7 +1200,9 @@ impl XlStorage {
             Ok(bytes) => serde_json::from_slice(&bytes).map_err(|err| {
                 MaxioError::InternalError(format!("failed to parse bucket versioning state: {err}"))
             }),
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(VersioningState::Unversioned),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                Ok(VersioningState::Unversioned)
+            }
             Err(err) => Err(MaxioError::Io(err)),
         }
     }
@@ -1185,8 +1221,9 @@ impl XlStorage {
     }
 
     async fn write_xl_meta(&self, path: &Path, meta: &XlMeta) -> Result<()> {
-        let bytes = serde_json::to_vec(meta)
-            .map_err(|err| MaxioError::InternalError(format!("failed to serialize xl.meta: {err}")))?;
+        let bytes = serde_json::to_vec(meta).map_err(|err| {
+            MaxioError::InternalError(format!("failed to serialize xl.meta: {err}"))
+        })?;
         fs::write(path, bytes).await?;
         Ok(())
     }
@@ -1202,7 +1239,11 @@ impl XlStorage {
         }
     }
 
-    async fn write_versions_index(&self, object_path: &Path, entries: &[VersionIndexEntry]) -> Result<()> {
+    async fn write_versions_index(
+        &self,
+        object_path: &Path,
+        entries: &[VersionIndexEntry],
+    ) -> Result<()> {
         fs::create_dir_all(object_path).await?;
         let bytes = serde_json::to_vec(entries).map_err(|err| {
             MaxioError::InternalError(format!("failed to serialize versions index: {err}"))
@@ -1219,7 +1260,11 @@ impl XlStorage {
         }
     }
 
-    async fn remove_version_dir_if_exists(&self, object_path: &Path, version_id: &str) -> Result<()> {
+    async fn remove_version_dir_if_exists(
+        &self,
+        object_path: &Path,
+        version_id: &str,
+    ) -> Result<()> {
         match fs::remove_dir_all(object_path.join(version_id)).await {
             Ok(()) => Ok(()),
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -1227,7 +1272,11 @@ impl XlStorage {
         }
     }
 
-    async fn ensure_versions_index(&self, bucket: &str, key: &str) -> Result<Vec<VersionIndexEntry>> {
+    async fn ensure_versions_index(
+        &self,
+        bucket: &str,
+        key: &str,
+    ) -> Result<Vec<VersionIndexEntry>> {
         let object_path = self.object_path(bucket, key);
         let entries = self.read_versions_index(&object_path).await?;
         if !entries.is_empty() {
@@ -1289,7 +1338,10 @@ impl XlStorage {
     ) -> Result<Option<ObjectInfo>> {
         let versions = self.read_versions_index(object_root).await?;
         if versions.is_empty() {
-            if let Some(meta) = self.read_xl_meta_if_exists(&object_root.join(META_FILE_NAME)).await? {
+            if let Some(meta) = self
+                .read_xl_meta_if_exists(&object_root.join(META_FILE_NAME))
+                .await?
+            {
                 return Ok(Some(self.meta_to_object_info(bucket, key, &meta)));
             }
             return Ok(None);
@@ -1299,7 +1351,9 @@ impl XlStorage {
             if entry.is_delete_marker {
                 continue;
             }
-            let (info, _, _) = self.read_object_version_meta(bucket, key, &entry.version_id).await?;
+            let (info, _, _) = self
+                .read_object_version_meta(bucket, key, &entry.version_id)
+                .await?;
             return Ok(Some(info));
         }
 
@@ -1476,7 +1530,10 @@ fn validate_object_key(key: &str) -> Result<()> {
     for component in key_path.components() {
         match component {
             Component::Normal(_) => {}
-            Component::CurDir | Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+            Component::CurDir
+            | Component::ParentDir
+            | Component::RootDir
+            | Component::Prefix(_) => {
                 return Err(MaxioError::InvalidObjectName(key.to_string()));
             }
         }
@@ -1513,7 +1570,12 @@ fn filetime_to_utc(filetime: Option<std::time::SystemTime>) -> Option<DateTime<U
     filetime.map(DateTime::<Utc>::from)
 }
 
-fn map_multipart_not_found(err: std::io::Error, bucket: &str, key: &str, upload_id: &str) -> MaxioError {
+fn map_multipart_not_found(
+    err: std::io::Error,
+    bucket: &str,
+    key: &str,
+    upload_id: &str,
+) -> MaxioError {
     if err.kind() == std::io::ErrorKind::NotFound {
         let object_key = if key.is_empty() { "<unknown>" } else { key };
         MaxioError::ObjectNotFound {

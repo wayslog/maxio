@@ -1,15 +1,15 @@
 use std::{collections::HashMap, sync::Arc};
 
 use axum::{
-    Extension,
+    Extension, Router,
     extract::{DefaultBodyLimit, Path, Query, State},
     response::Response,
     routing::{delete, get, post, put},
-    Router,
 };
 use maxio_auth::{credentials::CredentialProvider, middleware::AuthLayer};
 use maxio_common::error::MaxioError;
 use maxio_iam::IAMSys;
+use maxio_notification::NotificationSys;
 use maxio_storage::traits::ObjectLayer;
 
 use crate::handlers;
@@ -20,6 +20,7 @@ const MAX_BODY_SIZE: usize = 5 * 1024 * 1024 * 1024; // 5GB
 
 async fn get_bucket_dispatch(
     State(store): State<Arc<dyn ObjectLayer>>,
+    Extension(notifications): Extension<Arc<NotificationSys>>,
     Path(bucket): Path<String>,
     Query(query): Query<HashMap<String, String>>,
 ) -> Result<Response, S3Error> {
@@ -31,6 +32,13 @@ async fn get_bucket_dispatch(
         handlers::versioning::list_object_versions(State(store), Path(bucket), Query(query)).await
     } else if query.contains_key("uploads") {
         handlers::multipart::list_multipart_uploads(State(store), Path(bucket), Query(query)).await
+    } else if query.contains_key("notification") {
+        handlers::bucket::get_bucket_notification_configuration(
+            State(store),
+            Extension(notifications),
+            Path(bucket),
+        )
+        .await
     } else if query.get("list-type").is_some_and(|v| v == "2") {
         handlers::object::list_objects_v2(State(store), Path(bucket), Query(query)).await
     } else {
@@ -40,12 +48,21 @@ async fn get_bucket_dispatch(
 
 async fn put_bucket_dispatch(
     State(store): State<Arc<dyn ObjectLayer>>,
+    Extension(notifications): Extension<Arc<NotificationSys>>,
     Path(bucket): Path<String>,
     Query(query): Query<HashMap<String, String>>,
     body: axum::body::Bytes,
 ) -> Result<Response, S3Error> {
     if query.contains_key("versioning") {
         handlers::versioning::put_bucket_versioning(State(store), Path(bucket), body).await
+    } else if query.contains_key("notification") {
+        handlers::bucket::put_bucket_notification_configuration(
+            State(store),
+            Extension(notifications),
+            Path(bucket),
+            body,
+        )
+        .await
     } else {
         handlers::bucket::make_bucket(State(store), Path(bucket)).await
     }
@@ -53,30 +70,42 @@ async fn put_bucket_dispatch(
 
 async fn put_object_dispatch(
     State(store): State<Arc<dyn ObjectLayer>>,
+    Extension(notifications): Extension<Arc<NotificationSys>>,
     Path((bucket, key)): Path<(String, String)>,
     Query(query): Query<HashMap<String, String>>,
     headers: axum::http::HeaderMap,
     body: axum::body::Bytes,
 ) -> Result<Response, S3Error> {
     if query.contains_key("uploadId") && query.contains_key("partNumber") {
-        handlers::multipart::upload_part(State(store), Path((bucket, key)), Query(query), body).await
+        handlers::multipart::upload_part(State(store), Path((bucket, key)), Query(query), body)
+            .await
     } else {
-        handlers::object::put_object(State(store), Path((bucket, key)), headers, body).await
+        handlers::object::put_object(
+            State(store),
+            Extension(notifications),
+            Path((bucket, key)),
+            headers,
+            body,
+        )
+        .await
     }
 }
 
 async fn post_object_dispatch(
     State(store): State<Arc<dyn ObjectLayer>>,
+    Extension(notifications): Extension<Arc<NotificationSys>>,
     Path((bucket, key)): Path<(String, String)>,
     Query(query): Query<HashMap<String, String>>,
     headers: axum::http::HeaderMap,
     body: axum::body::Bytes,
 ) -> Result<Response, S3Error> {
     if query.contains_key("uploads") {
-        handlers::multipart::create_multipart_upload(State(store), Path((bucket, key)), headers).await
+        handlers::multipart::create_multipart_upload(State(store), Path((bucket, key)), headers)
+            .await
     } else if query.contains_key("uploadId") {
         handlers::multipart::complete_multipart_upload(
             State(store),
+            Extension(notifications),
             Path((bucket, key)),
             Query(query),
             headers,
@@ -105,6 +134,7 @@ async fn get_object_dispatch(
 
 async fn delete_object_dispatch(
     State(store): State<Arc<dyn ObjectLayer>>,
+    Extension(notifications): Extension<Arc<NotificationSys>>,
     Path((bucket, key)): Path<(String, String)>,
     Query(query): Query<HashMap<String, String>>,
 ) -> Result<Response, S3Error> {
@@ -112,7 +142,13 @@ async fn delete_object_dispatch(
         handlers::multipart::abort_multipart_upload(State(store), Path((bucket, key)), Query(query))
             .await
     } else {
-        handlers::object::delete_object(State(store), Path((bucket, key)), Query(query)).await
+        handlers::object::delete_object(
+            State(store),
+            Extension(notifications),
+            Path((bucket, key)),
+            Query(query),
+        )
+        .await
     }
 }
 
@@ -120,12 +156,10 @@ pub fn s3_router(
     object_layer: Arc<dyn ObjectLayer>,
     credential_provider: Arc<dyn CredentialProvider>,
     iam: Arc<IAMSys>,
+    notifications: Arc<NotificationSys>,
 ) -> Router {
     let app: Router<Arc<dyn ObjectLayer>> = Router::<Arc<dyn ObjectLayer>>::new()
-        .route(
-            "/minio/admin/v3/add-user",
-            post(handlers::admin::add_user),
-        )
+        .route("/minio/admin/v3/add-user", post(handlers::admin::add_user))
         .route(
             "/minio/admin/v3/remove-user",
             delete(handlers::admin::remove_user),
@@ -162,5 +196,6 @@ pub fn s3_router(
     app.layer(DefaultBodyLimit::max(MAX_BODY_SIZE))
         .layer(AuthLayer::new(credential_provider))
         .layer(Extension(iam))
+        .layer(Extension(notifications))
         .with_state(object_layer)
 }

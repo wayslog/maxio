@@ -1,13 +1,16 @@
 use std::sync::Arc;
 
 use axum::{
+    Extension,
+    body::Bytes,
     extract::{Path, State},
     response::{IntoResponse, Response},
 };
 use http::StatusCode;
 use maxio_common::{error::MaxioError, types::BucketInfo};
+use maxio_notification::{NotificationSys, types::NotificationConfiguration};
 use maxio_storage::traits::ObjectLayer;
-use quick_xml::se::to_string as xml_to_string;
+use quick_xml::{de::from_str as xml_from_str, se::to_string as xml_to_string};
 use serde::Serialize;
 
 use crate::error::S3Error;
@@ -121,4 +124,31 @@ pub async fn get_bucket_location(
         value: String::new(),
     };
     xml_response(StatusCode::OK, &payload)
+}
+
+pub async fn get_bucket_notification_configuration(
+    State(store): State<Arc<dyn ObjectLayer>>,
+    Extension(notifications): Extension<Arc<NotificationSys>>,
+    Path(bucket): Path<String>,
+) -> S3Result {
+    store.get_bucket_info(&bucket).await?;
+    let config = notifications.get_config(&bucket).await?;
+    xml_response(StatusCode::OK, &config)
+}
+
+pub async fn put_bucket_notification_configuration(
+    State(store): State<Arc<dyn ObjectLayer>>,
+    Extension(notifications): Extension<Arc<NotificationSys>>,
+    Path(bucket): Path<String>,
+    body: Bytes,
+) -> S3Result {
+    store.get_bucket_info(&bucket).await?;
+    let body_str = std::str::from_utf8(&body).map_err(|err| {
+        MaxioError::InvalidArgument(format!("invalid notification xml body encoding: {err}"))
+    })?;
+    let config: NotificationConfiguration = xml_from_str(body_str).map_err(|err| {
+        MaxioError::InvalidArgument(format!("invalid notification xml body: {err}"))
+    })?;
+    notifications.set_config(&bucket, config).await?;
+    Ok(StatusCode::OK.into_response())
 }

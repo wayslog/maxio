@@ -1,6 +1,6 @@
 use hmac::{Hmac, Mac};
 use http::HeaderMap;
-use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
+use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
 use sha2::{Digest, Sha256};
 
 type HmacSha256 = Hmac<Sha256>;
@@ -123,11 +123,7 @@ pub fn canonical_uri(path: &str) -> String {
     if ends_with_slash && !out.ends_with('/') {
         out.push('/');
     }
-    if out.is_empty() {
-        "/".to_string()
-    } else {
-        out
-    }
+    if out.is_empty() { "/".to_string() } else { out }
 }
 
 pub fn canonical_query_string(query_string: &str) -> String {

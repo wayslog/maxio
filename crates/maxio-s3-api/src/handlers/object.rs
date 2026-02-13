@@ -1,25 +1,32 @@
 use std::{collections::HashMap, sync::Arc};
 
 use axum::{
+    Extension,
     body::{Body, Bytes},
     extract::{Path, Query, State},
     http::{
-        header::{CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE, ETAG, LAST_MODIFIED, RANGE},
         HeaderMap, HeaderName, HeaderValue, StatusCode,
+        header::{CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE, ETAG, LAST_MODIFIED, RANGE},
     },
     response::{IntoResponse, Response},
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
-use md5::{Digest, Md5};
+use chrono::Utc;
 use maxio_common::{
     error::MaxioError,
     types::{ObjectEncryption, ObjectInfo},
 };
+use maxio_notification::{
+    NotificationSys,
+    types::{BucketInfo as NotificationBucketInfo, ObjectInfo as NotificationObjectInfo, S3Event},
+};
 use maxio_storage::traits::{
     GetEncryptionOptions, ListObjectsResult, ObjectLayer, PutEncryptionOptions, VersioningState,
 };
+use md5::{Digest, Md5};
 use quick_xml::se::to_string as xml_to_string;
 use serde::Serialize;
+use tracing::warn;
 
 use crate::error::S3Error;
 
@@ -126,7 +133,10 @@ fn write_object_headers(
     headers.insert(CONTENT_TYPE, header_value(&info.content_type)?);
     headers.insert(CONTENT_LENGTH, header_value(&content_len.to_string())?);
     headers.insert(ETAG, header_value(&quoted_etag(&info.etag))?);
-    headers.insert(LAST_MODIFIED, header_value(&info.last_modified.to_rfc2822())?);
+    headers.insert(
+        LAST_MODIFIED,
+        header_value(&info.last_modified.to_rfc2822())?,
+    );
 
     for (key, value) in &info.metadata {
         let header_name = HeaderName::from_bytes(format!("x-amz-meta-{key}").as_bytes())
@@ -147,10 +157,7 @@ fn write_encryption_response_headers(
 ) -> std::result::Result<(), MaxioError> {
     headers.insert(SSE_HEADER, header_value(&encryption.algorithm)?);
     if encryption.sse_type == "SSE-C" {
-        headers.insert(
-            SSE_C_ALGORITHM_HEADER,
-            header_value(&encryption.algorithm)?,
-        );
+        headers.insert(SSE_C_ALGORITHM_HEADER, header_value(&encryption.algorithm)?);
         if let Some(key_md5) = encryption.key_md5.as_deref() {
             headers.insert(SSE_C_KEY_MD5_HEADER, header_value(key_md5)?);
         }
@@ -229,9 +236,8 @@ fn parse_sse_c_headers(
         ));
     }
 
-    let algorithm = algorithm.ok_or_else(|| {
-        MaxioError::InvalidArgument("missing SSE-C algorithm header".to_string())
-    })?;
+    let algorithm = algorithm
+        .ok_or_else(|| MaxioError::InvalidArgument("missing SSE-C algorithm header".to_string()))?;
     if algorithm != "AES256" {
         return Err(MaxioError::InvalidArgument(
             "unsupported SSE-C algorithm".to_string(),
@@ -240,9 +246,8 @@ fn parse_sse_c_headers(
 
     let key_b64 = key_b64
         .ok_or_else(|| MaxioError::InvalidArgument("missing SSE-C customer key".to_string()))?;
-    let key_md5 = key_md5.ok_or_else(|| {
-        MaxioError::InvalidArgument("missing SSE-C customer key MD5".to_string())
-    })?;
+    let key_md5 = key_md5
+        .ok_or_else(|| MaxioError::InvalidArgument("missing SSE-C customer key MD5".to_string()))?;
 
     let key_bytes = BASE64_STANDARD.decode(key_b64).map_err(|_| {
         MaxioError::InvalidArgument("invalid base64 SSE-C customer key".to_string())
@@ -268,7 +273,9 @@ fn parse_sse_c_headers(
     }))
 }
 
-fn parse_put_encryption(headers: &HeaderMap) -> std::result::Result<Option<PutEncryptionOptions>, MaxioError> {
+fn parse_put_encryption(
+    headers: &HeaderMap,
+) -> std::result::Result<Option<PutEncryptionOptions>, MaxioError> {
     let sse_s3 = headers
         .get(SSE_HEADER)
         .and_then(|value| value.to_str().ok())
@@ -314,6 +321,7 @@ fn parse_put_encryption(headers: &HeaderMap) -> std::result::Result<Option<PutEn
 
 pub async fn put_object(
     State(store): State<Arc<dyn ObjectLayer>>,
+    Extension(notifications): Extension<Arc<NotificationSys>>,
     Path((bucket, key)): Path<(String, String)>,
     headers: HeaderMap,
     body: Bytes,
@@ -332,6 +340,28 @@ pub async fn put_object(
     if let Some(encryption) = info.encryption.as_ref() {
         write_encryption_response_headers(&mut response_headers, encryption)?;
     }
+
+    spawn_notification(
+        notifications,
+        bucket.clone(),
+        S3Event {
+            event_version: "2.1".to_string(),
+            event_source: "aws:s3".to_string(),
+            aws_region: "".to_string(),
+            event_time: Utc::now().to_rfc3339(),
+            event_name: "s3:ObjectCreated:Put".to_string(),
+            bucket: NotificationBucketInfo {
+                name: bucket.clone(),
+                arn: format!("arn:aws:s3:::{bucket}"),
+            },
+            object: NotificationObjectInfo {
+                key,
+                size: info.size,
+                etag: info.etag.clone(),
+            },
+        },
+    );
+
     Ok((StatusCode::OK, response_headers).into_response())
 }
 
@@ -341,7 +371,10 @@ pub async fn get_object(
     Query(query): Query<HashMap<String, String>>,
     headers: HeaderMap,
 ) -> S3Result {
-    let version_id = query.get("versionId").cloned().filter(|item| !item.is_empty());
+    let version_id = query
+        .get("versionId")
+        .cloned()
+        .filter(|item| !item.is_empty());
     let encryption = parse_sse_c_headers(&headers, false)?;
     let (info, data) = match version_id.as_deref() {
         Some(version_id) => {
@@ -372,11 +405,12 @@ pub async fn get_object(
     *response.status_mut() = status;
     write_object_headers(response.headers_mut(), &info, response_len)?;
     if let Some(version_id) = info.version_id.as_deref() {
-        response
-            .headers_mut()
-            .insert("x-amz-version-id", HeaderValue::from_str(version_id).map_err(|err| {
+        response.headers_mut().insert(
+            "x-amz-version-id",
+            HeaderValue::from_str(version_id).map_err(|err| {
                 MaxioError::InvalidArgument(format!("invalid version id header value: {err}"))
-            })?);
+            })?,
+        );
     }
 
     if let Some(range_str) = content_range {
@@ -423,33 +457,66 @@ pub async fn head_object(
     let info = store.get_object_info(&bucket, &key, encryption).await?;
     let mut response = Response::new(Body::empty());
     *response.status_mut() = StatusCode::OK;
-    let content_len = if info.size >= 0 { info.size as usize } else { 0 };
+    let content_len = if info.size >= 0 {
+        info.size as usize
+    } else {
+        0
+    };
     write_object_headers(response.headers_mut(), &info, content_len)?;
     Ok(response)
 }
 
 pub async fn delete_object(
     State(store): State<Arc<dyn ObjectLayer>>,
+    Extension(notifications): Extension<Arc<NotificationSys>>,
     Path((bucket, key)): Path<(String, String)>,
     Query(query): Query<HashMap<String, String>>,
 ) -> S3Result {
     if let Some(version_id) = query.get("versionId").filter(|item| !item.is_empty()) {
-        store.delete_object_version(&bucket, &key, version_id).await?;
+        store
+            .delete_object_version(&bucket, &key, version_id)
+            .await?;
         return Ok(StatusCode::NO_CONTENT.into_response());
     }
 
     let versioning = store.get_bucket_versioning(&bucket).await?;
+    let object_info = store.get_object_info(&bucket, &key, None).await.ok();
     store.delete_object(&bucket, &key).await?;
 
+    spawn_notification(
+        notifications,
+        bucket.clone(),
+        S3Event {
+            event_version: "2.1".to_string(),
+            event_source: "aws:s3".to_string(),
+            aws_region: "".to_string(),
+            event_time: Utc::now().to_rfc3339(),
+            event_name: "s3:ObjectRemoved:Delete".to_string(),
+            bucket: NotificationBucketInfo {
+                name: bucket.clone(),
+                arn: format!("arn:aws:s3:::{bucket}"),
+            },
+            object: NotificationObjectInfo {
+                key,
+                size: object_info.as_ref().map_or(0, |info| info.size),
+                etag: object_info.map_or_else(String::new, |info| info.etag),
+            },
+        },
+    );
+
     if versioning == VersioningState::Enabled {
-        return Ok((
-            StatusCode::NO_CONTENT,
-            [("x-amz-delete-marker", "true")],
-        )
-            .into_response());
+        return Ok((StatusCode::NO_CONTENT, [("x-amz-delete-marker", "true")]).into_response());
     }
 
     Ok(StatusCode::NO_CONTENT.into_response())
+}
+
+fn spawn_notification(notifications: Arc<NotificationSys>, bucket: String, event: S3Event) {
+    tokio::spawn(async move {
+        if let Err(err) = notifications.notify(&bucket, event).await {
+            warn!(bucket = %bucket, error = %err, "notification dispatch failed");
+        }
+    });
 }
 
 pub async fn list_objects_v1(

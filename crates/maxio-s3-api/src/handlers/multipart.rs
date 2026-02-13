@@ -1,18 +1,25 @@
 use std::{collections::HashMap, sync::Arc};
 
 use axum::{
+    Extension,
     body::Bytes,
     extract::{Path, Query, State},
     http::{
-        header::{CONTENT_TYPE, ETAG, HOST},
         HeaderMap, HeaderValue, StatusCode,
+        header::{CONTENT_TYPE, ETAG, HOST},
     },
     response::{IntoResponse, Response},
 };
+use chrono::Utc;
 use maxio_common::error::MaxioError;
+use maxio_notification::{
+    NotificationSys,
+    types::{BucketInfo as NotificationBucketInfo, ObjectInfo as NotificationObjectInfo, S3Event},
+};
 use maxio_storage::traits::{CompletePart, MultipartUploadInfo, ObjectLayer, PartInfo};
 use quick_xml::{de::from_str as xml_from_str, se::to_string as xml_to_string};
 use serde::{Deserialize, Serialize};
+use tracing::warn;
 
 use crate::error::S3Error;
 
@@ -231,6 +238,7 @@ pub async fn upload_part(
 
 pub async fn complete_multipart_upload(
     State(store): State<Arc<dyn ObjectLayer>>,
+    Extension(notifications): Extension<Arc<NotificationSys>>,
     Path((bucket, key)): Path<(String, String)>,
     Query(query): Query<HashMap<String, String>>,
     headers: HeaderMap,
@@ -238,7 +246,9 @@ pub async fn complete_multipart_upload(
 ) -> S3Result {
     let upload_id = parse_upload_id(&query)?;
     let body_str = std::str::from_utf8(&body).map_err(|err| {
-        MaxioError::InvalidArgument(format!("invalid complete multipart xml body encoding: {err}"))
+        MaxioError::InvalidArgument(format!(
+            "invalid complete multipart xml body encoding: {err}"
+        ))
     })?;
     let payload: CompleteMultipartUploadXml = xml_from_str(body_str).map_err(|err| {
         MaxioError::InvalidArgument(format!("invalid complete multipart xml body: {err}"))
@@ -256,10 +266,40 @@ pub async fn complete_multipart_upload(
     let payload = CompleteMultipartUploadResultXml {
         location: format!("http://{host}/{bucket}/{key}"),
         bucket,
-        key,
+        key: key.clone(),
         etag: quoted_etag(&info.etag),
     };
+
+    spawn_notification(
+        notifications,
+        payload.bucket.clone(),
+        S3Event {
+            event_version: "2.1".to_string(),
+            event_source: "aws:s3".to_string(),
+            aws_region: "".to_string(),
+            event_time: Utc::now().to_rfc3339(),
+            event_name: "s3:ObjectCreated:CompleteMultipartUpload".to_string(),
+            bucket: NotificationBucketInfo {
+                name: payload.bucket.clone(),
+                arn: format!("arn:aws:s3:::{}", payload.bucket),
+            },
+            object: NotificationObjectInfo {
+                key,
+                size: info.size,
+                etag: info.etag,
+            },
+        },
+    );
+
     xml_response(StatusCode::OK, &payload)
+}
+
+fn spawn_notification(notifications: Arc<NotificationSys>, bucket: String, event: S3Event) {
+    tokio::spawn(async move {
+        if let Err(err) = notifications.notify(&bucket, event).await {
+            warn!(bucket = %bucket, error = %err, "notification dispatch failed");
+        }
+    });
 }
 
 pub async fn abort_multipart_upload(
@@ -268,7 +308,9 @@ pub async fn abort_multipart_upload(
     Query(query): Query<HashMap<String, String>>,
 ) -> S3Result {
     let upload_id = parse_upload_id(&query)?;
-    store.abort_multipart_upload(&bucket, &key, upload_id).await?;
+    store
+        .abort_multipart_upload(&bucket, &key, upload_id)
+        .await?;
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 

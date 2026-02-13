@@ -13,8 +13,8 @@ use tokio::fs;
 
 use md5::Digest as _;
 
-use crate::erasure::{ErasureConfig, ErasureInfo, decode_block, encode_block};
 use crate::erasure::storage::ErasureStorage;
+use crate::erasure::{ErasureConfig, ErasureInfo, decode_block, encode_block};
 use crate::traits::{
     CompletePart, GetEncryptionOptions, ListObjectsResult, MultipartUploadInfo, ObjectLayer,
     ObjectVersion, PartInfo, PutEncryptionOptions, VersioningState,
@@ -47,14 +47,19 @@ impl ErasureObjectLayer {
     }
 
     fn object_path(&self, shard_idx: usize, bucket: &str, key: &str) -> Result<PathBuf> {
-        let shard_root = self
-            .storage
-            .shard_path(shard_idx)
-            .ok_or_else(|| MaxioError::InternalError(format!("invalid shard index: {shard_idx}")))?;
+        let shard_root = self.storage.shard_path(shard_idx).ok_or_else(|| {
+            MaxioError::InternalError(format!("invalid shard index: {shard_idx}"))
+        })?;
         Ok(shard_root.join(bucket).join(key))
     }
 
-    fn block_part_path(&self, shard_idx: usize, bucket: &str, key: &str, block_idx: usize) -> Result<PathBuf> {
+    fn block_part_path(
+        &self,
+        shard_idx: usize,
+        bucket: &str,
+        key: &str,
+        block_idx: usize,
+    ) -> Result<PathBuf> {
         Ok(self
             .object_path(shard_idx, bucket, key)?
             .join(format!("block_{block_idx}"))
@@ -79,9 +84,15 @@ impl ErasureObjectLayer {
         Ok(())
     }
 
-    async fn write_meta_to_quorum(&self, bucket: &str, key: &str, meta: &ErasureMeta) -> Result<()> {
-        let meta_bytes = serde_json::to_vec(meta)
-            .map_err(|err| MaxioError::InternalError(format!("failed to serialize xl.meta: {err}")))?;
+    async fn write_meta_to_quorum(
+        &self,
+        bucket: &str,
+        key: &str,
+        meta: &ErasureMeta,
+    ) -> Result<()> {
+        let meta_bytes = serde_json::to_vec(meta).map_err(|err| {
+            MaxioError::InternalError(format!("failed to serialize xl.meta: {err}"))
+        })?;
         let mut success = 0_usize;
 
         for shard_idx in 0..self.storage.shard_count() {
@@ -113,7 +124,9 @@ impl ErasureObjectLayer {
         let mut last_error: Option<MaxioError> = None;
 
         for shard_idx in 0..self.storage.shard_count() {
-            let meta_path = self.object_path(shard_idx, bucket, key)?.join(META_FILE_NAME);
+            let meta_path = self
+                .object_path(shard_idx, bucket, key)?
+                .join(META_FILE_NAME);
             match fs::read(meta_path).await {
                 Ok(bytes) => {
                     let meta: ErasureMeta = serde_json::from_slice(&bytes).map_err(|err| {
@@ -253,7 +266,12 @@ impl ObjectLayer for ErasureObjectLayer {
 
         let mut changed = 0_usize;
         for shard in self.storage.shards() {
-            if shard.storage.set_bucket_versioning(bucket, state).await.is_ok() {
+            if shard
+                .storage
+                .set_bucket_versioning(bucket, state)
+                .await
+                .is_ok()
+            {
                 changed += 1;
             }
         }
@@ -445,7 +463,8 @@ impl ObjectLayer for ErasureObjectLayer {
 
             let decoded = decode_block(shards, &block_config)?;
             let written = block_idx * block_config.block_size;
-            let expected_block_size = std::cmp::min(block_config.block_size, total_size.saturating_sub(written));
+            let expected_block_size =
+                std::cmp::min(block_config.block_size, total_size.saturating_sub(written));
 
             if decoded.len() < expected_block_size {
                 return Err(MaxioError::InternalError(format!(
@@ -652,7 +671,14 @@ impl ObjectLayer for ErasureObjectLayer {
         let content_type = staged_info.content_type.clone();
         let metadata = staged_info.metadata.clone();
         let mut finalized = self
-            .put_object(bucket, key, staged_data, Some(&content_type), metadata, None)
+            .put_object(
+                bucket,
+                key,
+                staged_data,
+                Some(&content_type),
+                metadata,
+                None,
+            )
             .await?;
 
         let mut meta = self.read_meta_from_any(bucket, key).await?;
@@ -701,7 +727,8 @@ impl ObjectLayer for ErasureObjectLayer {
 }
 
 fn validate_bucket_name(bucket: &str) -> Result<()> {
-    if bucket.is_empty() || bucket == ".maxio.sys" || bucket.contains('/') || bucket.contains('\\') {
+    if bucket.is_empty() || bucket == ".maxio.sys" || bucket.contains('/') || bucket.contains('\\')
+    {
         return Err(MaxioError::InvalidBucketName(bucket.to_string()));
     }
     Ok(())
@@ -720,7 +747,10 @@ fn validate_object_key(key: &str) -> Result<()> {
     for component in key_path.components() {
         match component {
             Component::Normal(_) => {}
-            Component::CurDir | Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+            Component::CurDir
+            | Component::ParentDir
+            | Component::RootDir
+            | Component::Prefix(_) => {
                 return Err(MaxioError::InvalidObjectName(key.to_string()));
             }
         }

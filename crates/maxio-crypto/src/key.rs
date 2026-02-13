@@ -1,5 +1,5 @@
 use hkdf::Hkdf;
-use rand::{rngs::OsRng, RngCore};
+use rand::{RngCore, rngs::OsRng};
 use sha2::{Digest, Sha256};
 
 use crate::{CryptoError, Result};

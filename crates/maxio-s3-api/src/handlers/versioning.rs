@@ -154,8 +154,9 @@ pub async fn put_bucket_versioning(
 ) -> S3Result {
     let body_str = std::str::from_utf8(&body)
         .map_err(|err| MaxioError::InvalidArgument(format!("invalid xml body encoding: {err}")))?;
-    let payload: VersioningConfigurationXml = xml_from_str(body_str)
-        .map_err(|err| MaxioError::InvalidArgument(format!("invalid versioning xml body: {err}")))?;
+    let payload: VersioningConfigurationXml = xml_from_str(body_str).map_err(|err| {
+        MaxioError::InvalidArgument(format!("invalid versioning xml body: {err}"))
+    })?;
     let state = parse_status(payload.status.as_deref())?;
     store.set_bucket_versioning(&bucket, state).await?;
     Ok(StatusCode::OK.into_response())
@@ -168,7 +169,9 @@ pub async fn list_object_versions(
 ) -> S3Result {
     let prefix = query.get("prefix").cloned().unwrap_or_default();
     let max_keys = parse_max_keys(&query);
-    let items = store.list_object_versions(&bucket, &prefix, max_keys).await?;
+    let items = store
+        .list_object_versions(&bucket, &prefix, max_keys)
+        .await?;
     let (versions, delete_markers) = split_versions(items);
     let payload = ListVersionsResultXml {
         name: bucket,

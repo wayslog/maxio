@@ -97,10 +97,13 @@ pub trait ObjectLayer: Send + Sync {
         key: &str,
         version_id: &str,
         encryption: Option<GetEncryptionOptions>,
-    )
-    -> Result<(ObjectInfo, Bytes)>;
-    async fn get_object_info(&self, bucket: &str, key: &str, encryption: Option<GetEncryptionOptions>)
-    -> Result<ObjectInfo>;
+    ) -> Result<(ObjectInfo, Bytes)>;
+    async fn get_object_info(
+        &self,
+        bucket: &str,
+        key: &str,
+        encryption: Option<GetEncryptionOptions>,
+    ) -> Result<ObjectInfo>;
     async fn delete_object(&self, bucket: &str, key: &str) -> Result<()>;
     async fn delete_object_version(&self, bucket: &str, key: &str, version_id: &str) -> Result<()>;
     async fn list_objects(
@@ -141,6 +144,9 @@ pub trait ObjectLayer: Send + Sync {
     ) -> Result<ObjectInfo>;
     async fn abort_multipart_upload(&self, bucket: &str, key: &str, upload_id: &str) -> Result<()>;
     async fn list_parts(&self, bucket: &str, key: &str, upload_id: &str) -> Result<Vec<PartInfo>>;
-    async fn list_multipart_uploads(&self, bucket: &str, prefix: &str)
-    -> Result<Vec<MultipartUploadInfo>>;
+    async fn list_multipart_uploads(
+        &self,
+        bucket: &str,
+        prefix: &str,
+    ) -> Result<Vec<MultipartUploadInfo>>;
 }

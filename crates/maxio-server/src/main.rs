@@ -3,6 +3,7 @@ use std::{path::PathBuf, sync::Arc};
 use clap::Parser;
 use maxio_auth::credentials::{CredentialProvider, StaticCredentialProvider};
 use maxio_iam::IAMSys;
+use maxio_notification::{NotificationStore, NotificationSys, WebhookTarget};
 use maxio_storage::{
     erasure::{ErasureConfig, objects::ErasureObjectLayer},
     single::SingleDiskObjectLayer,
@@ -33,17 +34,17 @@ struct Cli {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let env_filter = EnvFilter::from_default_env().add_directive("maxio=info".parse()?);
-    tracing_subscriber::fmt()
-        .with_env_filter(env_filter)
-        .init();
+    tracing_subscriber::fmt().with_env_filter(env_filter).init();
 
     let cli = Cli::parse();
     let addr = format!("{}:{}", cli.host, cli.port);
-    let object_layer: Arc<dyn ObjectLayer> = if cli.erasure {
-        let disks = cli
-            .disks
-            .as_deref()
-            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "--disks is required when --erasure is enabled"))?;
+    let (object_layer, notification_root): (Arc<dyn ObjectLayer>, PathBuf) = if cli.erasure {
+        let disks = cli.disks.as_deref().ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "--disks is required when --erasure is enabled",
+            )
+        })?;
         let disk_paths: Vec<PathBuf> = disks
             .split(',')
             .map(str::trim)
@@ -59,11 +60,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .into());
         }
 
-        Arc::new(ErasureObjectLayer::new(disk_paths, ErasureConfig::default()).await?)
+        let notification_root = disk_paths[0].clone();
+        (
+            Arc::new(ErasureObjectLayer::new(disk_paths, ErasureConfig::default()).await?),
+            notification_root,
+        )
     } else {
         let data_dir = PathBuf::from(&cli.data_dir);
         tokio::fs::create_dir_all(&data_dir).await?;
-        Arc::new(SingleDiskObjectLayer::new(data_dir).await?)
+        (
+            Arc::new(SingleDiskObjectLayer::new(data_dir.clone()).await?),
+            data_dir,
+        )
     };
     let access_key = std::env::var("MAXIO_ROOT_USER").unwrap_or_else(|_| "minioadmin".to_string());
     let secret_key =
@@ -71,10 +79,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let iam_data_dir = PathBuf::from(&cli.data_dir);
     tokio::fs::create_dir_all(&iam_data_dir).await?;
     let iam = Arc::new(IAMSys::new(&iam_data_dir).await?);
-    let credential_provider: Arc<dyn CredentialProvider> =
-        Arc::new(StaticCredentialProvider::with_iam(access_key, secret_key, Arc::clone(&iam)));
+    let credential_provider: Arc<dyn CredentialProvider> = Arc::new(
+        StaticCredentialProvider::with_iam(access_key, secret_key, Arc::clone(&iam)),
+    );
 
-    let app = maxio_s3_api::router::s3_router(object_layer, credential_provider, iam);
+    let mut notification_sys = NotificationSys::new(NotificationStore::new(notification_root));
+    if let Ok(endpoint) = std::env::var("MAXIO_NOTIFY_WEBHOOK_ENDPOINT") {
+        let endpoint = endpoint.trim();
+        if !endpoint.is_empty() {
+            notification_sys.register_target(
+                "webhook".to_string(),
+                Box::new(WebhookTarget::new(endpoint.to_string())),
+            );
+            info!("webhook notification target enabled");
+        }
+    }
+    let notification_sys = Arc::new(notification_sys);
+
+    let app =
+        maxio_s3_api::router::s3_router(object_layer, credential_provider, iam, notification_sys);
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     info!("maxio server listening on {addr}");

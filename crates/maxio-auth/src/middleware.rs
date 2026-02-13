@@ -13,9 +13,7 @@ use tower::{Layer, Service};
 use tracing::debug;
 
 use crate::{
-    credentials::CredentialProvider,
-    parser::parse_auth_header,
-    signature_v4::verify_signature,
+    credentials::CredentialProvider, parser::parse_auth_header, signature_v4::verify_signature,
 };
 
 #[derive(Clone)]
@@ -158,7 +156,8 @@ where
                 return Ok(s3_error_response(MaxioError::SignatureDoesNotMatch));
             }
 
-            let (action, resource) = derive_action_resource(req.method().as_str(), req.uri().path());
+            let (action, resource) =
+                derive_action_resource(req.method().as_str(), req.uri().path());
             if !provider.is_allowed(&parsed.access_key, &action, &resource) {
                 return Ok(s3_error_response(MaxioError::AccessDenied(
                     "iam policy denied this operation".to_string(),
@@ -172,7 +171,10 @@ where
 
 fn derive_action_resource(method: &str, path: &str) -> (String, String) {
     if path == "/" {
-        return ("s3:ListAllMyBuckets".to_string(), "arn:aws:s3:::*".to_string());
+        return (
+            "s3:ListAllMyBuckets".to_string(),
+            "arn:aws:s3:::*".to_string(),
+        );
     }
 
     let trimmed = path.trim_start_matches('/');

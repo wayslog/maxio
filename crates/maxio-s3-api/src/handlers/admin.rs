@@ -60,7 +60,9 @@ pub async fn add_user(
     Extension(iam): Extension<Arc<IAMSys>>,
     Json(payload): Json<AddUserRequest>,
 ) -> Result<impl IntoResponse, S3Error> {
-    let user = iam.create_user(&payload.access_key, &payload.secret_key).await?;
+    let user = iam
+        .create_user(&payload.access_key, &payload.secret_key)
+        .await?;
     Ok((StatusCode::OK, Json(admin_user_info(&user))))
 }
 
