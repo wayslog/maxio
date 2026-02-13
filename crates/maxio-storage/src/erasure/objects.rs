@@ -15,7 +15,9 @@ use md5::Digest as _;
 
 use crate::erasure::{ErasureConfig, ErasureInfo, decode_block, encode_block};
 use crate::erasure::storage::ErasureStorage;
-use crate::traits::{ListObjectsResult, ObjectLayer};
+use crate::traits::{
+    CompletePart, ListObjectsResult, MultipartUploadInfo, ObjectLayer, PartInfo,
+};
 
 const META_FILE_NAME: &str = "xl.meta";
 const DATA_PART_FILE_NAME: &str = "part.1";
@@ -482,6 +484,114 @@ impl ObjectLayer for ErasureObjectLayer {
         Err(last_error.unwrap_or_else(|| {
             MaxioError::InternalError("no readable disks available for list_objects".to_string())
         }))
+    }
+
+    async fn create_multipart_upload(
+        &self,
+        bucket: &str,
+        key: &str,
+        content_type: Option<&str>,
+        metadata: HashMap<String, String>,
+    ) -> Result<String> {
+        validate_bucket_name(bucket)?;
+        validate_object_key(key)?;
+        self.ensure_bucket_exists_for_quorum(bucket).await?;
+
+        let staging = self.storage.shard_storage(0).ok_or_else(|| {
+            MaxioError::InternalError("missing shard 0 for multipart staging".to_string())
+        })?;
+        staging
+            .create_multipart_upload(bucket, key, content_type, metadata)
+            .await
+    }
+
+    async fn upload_part(
+        &self,
+        bucket: &str,
+        key: &str,
+        upload_id: &str,
+        part_number: i32,
+        data: Bytes,
+    ) -> Result<String> {
+        validate_bucket_name(bucket)?;
+        validate_object_key(key)?;
+        self.ensure_bucket_exists_for_quorum(bucket).await?;
+
+        let staging = self.storage.shard_storage(0).ok_or_else(|| {
+            MaxioError::InternalError("missing shard 0 for multipart staging".to_string())
+        })?;
+        staging
+            .upload_part(bucket, key, upload_id, part_number, data)
+            .await
+    }
+
+    async fn complete_multipart_upload(
+        &self,
+        bucket: &str,
+        key: &str,
+        upload_id: &str,
+        parts: Vec<CompletePart>,
+    ) -> Result<ObjectInfo> {
+        validate_bucket_name(bucket)?;
+        validate_object_key(key)?;
+        self.ensure_bucket_exists_for_quorum(bucket).await?;
+
+        let staging = self.storage.shard_storage(0).ok_or_else(|| {
+            MaxioError::InternalError("missing shard 0 for multipart staging".to_string())
+        })?;
+        let staged_info = staging
+            .complete_multipart_upload(bucket, key, upload_id, parts)
+            .await?;
+        let (_, staged_data) = staging.get_object(bucket, key).await?;
+
+        let content_type = staged_info.content_type.clone();
+        let metadata = staged_info.metadata.clone();
+        let mut finalized = self
+            .put_object(bucket, key, staged_data, Some(&content_type), metadata)
+            .await?;
+
+        let mut meta = self.read_meta_from_any(bucket, key).await?;
+        meta.etag = staged_info.etag.clone();
+        self.write_meta_to_quorum(bucket, key, &meta).await?;
+
+        finalized.etag = staged_info.etag;
+        Ok(finalized)
+    }
+
+    async fn abort_multipart_upload(&self, bucket: &str, key: &str, upload_id: &str) -> Result<()> {
+        validate_bucket_name(bucket)?;
+        validate_object_key(key)?;
+        self.ensure_bucket_exists_for_quorum(bucket).await?;
+
+        let staging = self.storage.shard_storage(0).ok_or_else(|| {
+            MaxioError::InternalError("missing shard 0 for multipart staging".to_string())
+        })?;
+        staging.abort_multipart_upload(bucket, key, upload_id).await
+    }
+
+    async fn list_parts(&self, bucket: &str, key: &str, upload_id: &str) -> Result<Vec<PartInfo>> {
+        validate_bucket_name(bucket)?;
+        validate_object_key(key)?;
+        self.ensure_bucket_exists_for_quorum(bucket).await?;
+
+        let staging = self.storage.shard_storage(0).ok_or_else(|| {
+            MaxioError::InternalError("missing shard 0 for multipart staging".to_string())
+        })?;
+        staging.list_parts(bucket, key, upload_id).await
+    }
+
+    async fn list_multipart_uploads(
+        &self,
+        bucket: &str,
+        prefix: &str,
+    ) -> Result<Vec<MultipartUploadInfo>> {
+        validate_bucket_name(bucket)?;
+        self.ensure_bucket_exists_for_quorum(bucket).await?;
+
+        let staging = self.storage.shard_storage(0).ok_or_else(|| {
+            MaxioError::InternalError("missing shard 0 for multipart staging".to_string())
+        })?;
+        staging.list_multipart_uploads(bucket, prefix).await
     }
 }
 

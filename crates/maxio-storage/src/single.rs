@@ -6,7 +6,9 @@ use bytes::Bytes;
 use maxio_common::error::Result;
 use maxio_common::types::{BucketInfo, ObjectInfo};
 
-use crate::traits::{ListObjectsResult, ObjectLayer};
+use crate::traits::{
+    CompletePart, ListObjectsResult, MultipartUploadInfo, ObjectLayer, PartInfo,
+};
 use crate::xl::storage::XlStorage;
 
 #[derive(Debug, Clone)]
@@ -75,5 +77,58 @@ impl ObjectLayer for SingleDiskObjectLayer {
         self.storage
             .list_objects(bucket, prefix, marker, delimiter, max_keys)
             .await
+    }
+
+    async fn create_multipart_upload(
+        &self,
+        bucket: &str,
+        key: &str,
+        content_type: Option<&str>,
+        metadata: HashMap<String, String>,
+    ) -> Result<String> {
+        self.storage
+            .create_multipart_upload(bucket, key, content_type, metadata)
+            .await
+    }
+
+    async fn upload_part(
+        &self,
+        bucket: &str,
+        key: &str,
+        upload_id: &str,
+        part_number: i32,
+        data: Bytes,
+    ) -> Result<String> {
+        self.storage
+            .upload_part(bucket, key, upload_id, part_number, data)
+            .await
+    }
+
+    async fn complete_multipart_upload(
+        &self,
+        bucket: &str,
+        key: &str,
+        upload_id: &str,
+        parts: Vec<CompletePart>,
+    ) -> Result<ObjectInfo> {
+        self.storage
+            .complete_multipart_upload(bucket, key, upload_id, parts)
+            .await
+    }
+
+    async fn abort_multipart_upload(&self, bucket: &str, key: &str, upload_id: &str) -> Result<()> {
+        self.storage.abort_multipart_upload(bucket, key, upload_id).await
+    }
+
+    async fn list_parts(&self, bucket: &str, key: &str, upload_id: &str) -> Result<Vec<PartInfo>> {
+        self.storage.list_parts(bucket, key, upload_id).await
+    }
+
+    async fn list_multipart_uploads(
+        &self,
+        bucket: &str,
+        prefix: &str,
+    ) -> Result<Vec<MultipartUploadInfo>> {
+        self.storage.list_multipart_uploads(bucket, prefix).await
     }
 }

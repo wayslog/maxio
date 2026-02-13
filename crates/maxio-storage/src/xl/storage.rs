@@ -10,12 +10,14 @@ use serde::{Deserialize, Serialize};
 use tokio::fs;
 use uuid::Uuid;
 
-use crate::traits::ListObjectsResult;
+use crate::traits::{CompletePart, ListObjectsResult, MultipartUploadInfo, PartInfo};
 
 const SYS_DIR_NAME: &str = ".maxio.sys";
 const META_FILE_NAME: &str = "xl.meta";
 const DATA_PART_FILE_NAME: &str = "part.1";
 const DEFAULT_CONTENT_TYPE: &str = "application/octet-stream";
+const MULTIPART_DIR_NAME: &str = ".multipart";
+const MULTIPART_META_FILE_NAME: &str = "upload.json";
 
 #[derive(Debug, Clone)]
 pub struct XlStorage {
@@ -31,6 +33,14 @@ struct XlMeta {
     content_type: String,
     mod_time: DateTime<Utc>,
     metadata: HashMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct MultipartUploadMeta {
+    key: String,
+    content_type: Option<String>,
+    metadata: HashMap<String, String>,
+    initiated: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone)]
@@ -365,12 +375,324 @@ impl XlStorage {
         })
     }
 
+    pub async fn create_multipart_upload(
+        &self,
+        bucket: &str,
+        key: &str,
+        content_type: Option<&str>,
+        metadata: HashMap<String, String>,
+    ) -> Result<String> {
+        validate_bucket_name(bucket)?;
+        validate_object_key(key)?;
+        ensure_bucket_exists(self, bucket).await?;
+
+        let upload_id = Uuid::new_v4().to_string();
+        let upload_path = self.multipart_upload_path(bucket, &upload_id);
+        fs::create_dir_all(&upload_path).await?;
+
+        let upload_meta = MultipartUploadMeta {
+            key: key.to_string(),
+            content_type: content_type.map(str::to_string),
+            metadata,
+            initiated: Utc::now(),
+        };
+
+        let meta_json = serde_json::to_vec(&upload_meta).map_err(|err| {
+            MaxioError::InternalError(format!("failed to serialize multipart upload meta: {err}"))
+        })?;
+        fs::write(upload_path.join(MULTIPART_META_FILE_NAME), meta_json).await?;
+
+        Ok(upload_id)
+    }
+
+    pub async fn upload_part(
+        &self,
+        bucket: &str,
+        key: &str,
+        upload_id: &str,
+        part_number: i32,
+        data: Bytes,
+    ) -> Result<String> {
+        validate_bucket_name(bucket)?;
+        validate_object_key(key)?;
+        validate_part_number(part_number)?;
+        ensure_bucket_exists(self, bucket).await?;
+
+        let upload_meta = self.read_multipart_upload_meta(bucket, upload_id).await?;
+        if upload_meta.key != key {
+            return Err(MaxioError::InvalidArgument(format!(
+                "upload id does not match object key: {bucket}/{key}"
+            )));
+        }
+
+        let etag = format!("{:x}", Md5::digest(&data));
+        let part_path = self.multipart_part_path(bucket, upload_id, part_number);
+        if let Some(parent) = part_path.parent() {
+            fs::create_dir_all(parent).await?;
+        }
+        fs::write(part_path, data).await?;
+
+        Ok(etag)
+    }
+
+    pub async fn complete_multipart_upload(
+        &self,
+        bucket: &str,
+        key: &str,
+        upload_id: &str,
+        parts: Vec<CompletePart>,
+    ) -> Result<ObjectInfo> {
+        validate_bucket_name(bucket)?;
+        validate_object_key(key)?;
+        ensure_bucket_exists(self, bucket).await?;
+
+        if parts.is_empty() {
+            return Err(MaxioError::InvalidArgument(
+                "complete multipart upload requires at least one part".to_string(),
+            ));
+        }
+
+        let upload_meta = self.read_multipart_upload_meta(bucket, upload_id).await?;
+        if upload_meta.key != key {
+            return Err(MaxioError::InvalidArgument(format!(
+                "upload id does not match object key: {bucket}/{key}"
+            )));
+        }
+
+        let mut all_parts = self.list_parts(bucket, key, upload_id).await?;
+        all_parts.sort_by_key(|item| item.part_number);
+        let part_map: HashMap<i32, PartInfo> = all_parts
+            .into_iter()
+            .map(|item| (item.part_number, item))
+            .collect();
+
+        let mut previous_part = 0;
+        let mut output = Vec::new();
+        let mut final_etag_material = Vec::with_capacity(parts.len() * 16);
+
+        for part in &parts {
+            validate_part_number(part.part_number)?;
+            if part.part_number <= previous_part {
+                return Err(MaxioError::InvalidArgument(
+                    "complete multipart upload parts must be in ascending order".to_string(),
+                ));
+            }
+            previous_part = part.part_number;
+
+            let provided_etag = normalize_etag(&part.etag);
+            let part_info = part_map.get(&part.part_number).ok_or_else(|| {
+                MaxioError::InvalidArgument(format!(
+                    "missing uploaded part {} for upload id {upload_id}",
+                    part.part_number
+                ))
+            })?;
+
+            if part_info.etag != provided_etag {
+                return Err(MaxioError::InvalidArgument(format!(
+                    "etag mismatch for part {}",
+                    part.part_number
+                )));
+            }
+
+            let part_path = self.multipart_part_path(bucket, upload_id, part.part_number);
+            let bytes = fs::read(part_path).await.map_err(|err| {
+                if err.kind() == std::io::ErrorKind::NotFound {
+                    MaxioError::InvalidArgument(format!(
+                        "missing uploaded part {} for upload id {upload_id}",
+                        part.part_number
+                    ))
+                } else {
+                    MaxioError::Io(err)
+                }
+            })?;
+            output.extend_from_slice(&bytes);
+
+            let part_md5 = decode_md5_hex(&part_info.etag)?;
+            final_etag_material.extend_from_slice(&part_md5);
+        }
+
+        let final_etag = format!("{:x}-{}", Md5::digest(&final_etag_material), parts.len());
+        let mod_time = Utc::now();
+        let size = i64::try_from(output.len()).map_err(|_| {
+            MaxioError::InvalidArgument(format!("object is too large to store: {bucket}/{key}"))
+        })?;
+        let content_type = upload_meta
+            .content_type
+            .unwrap_or_else(|| DEFAULT_CONTENT_TYPE.to_string());
+
+        let object_path = self.object_path(bucket, key);
+        if is_existing_directory(&object_path).await? {
+            fs::remove_dir_all(&object_path).await?;
+        }
+
+        let data_dir = Uuid::new_v4().to_string();
+        let data_path = object_path.join(&data_dir);
+        fs::create_dir_all(&data_path).await?;
+
+        fs::write(data_path.join(DATA_PART_FILE_NAME), &output).await?;
+        let xl_meta = XlMeta {
+            version: "1.0".to_string(),
+            data_dir,
+            size,
+            etag: final_etag.clone(),
+            content_type: content_type.clone(),
+            mod_time,
+            metadata: upload_meta.metadata.clone(),
+        };
+        let meta_json = serde_json::to_vec(&xl_meta)
+            .map_err(|err| MaxioError::InternalError(format!("failed to serialize xl.meta: {err}")))?;
+        fs::write(object_path.join(META_FILE_NAME), meta_json).await?;
+
+        self.abort_multipart_upload(bucket, key, upload_id).await?;
+
+        Ok(ObjectInfo {
+            bucket: bucket.to_string(),
+            key: key.to_string(),
+            size,
+            etag: final_etag,
+            content_type,
+            last_modified: mod_time,
+            metadata: upload_meta.metadata,
+            version_id: None,
+        })
+    }
+
+    pub async fn abort_multipart_upload(&self, bucket: &str, key: &str, upload_id: &str) -> Result<()> {
+        validate_bucket_name(bucket)?;
+        validate_object_key(key)?;
+        ensure_bucket_exists(self, bucket).await?;
+
+        let upload_meta = self.read_multipart_upload_meta(bucket, upload_id).await?;
+        if upload_meta.key != key {
+            return Err(MaxioError::InvalidArgument(format!(
+                "upload id does not match object key: {bucket}/{key}"
+            )));
+        }
+
+        let upload_path = self.multipart_upload_path(bucket, upload_id);
+        fs::remove_dir_all(upload_path).await?;
+        Ok(())
+    }
+
+    pub async fn list_parts(&self, bucket: &str, key: &str, upload_id: &str) -> Result<Vec<PartInfo>> {
+        validate_bucket_name(bucket)?;
+        validate_object_key(key)?;
+        ensure_bucket_exists(self, bucket).await?;
+
+        let upload_meta = self.read_multipart_upload_meta(bucket, upload_id).await?;
+        if upload_meta.key != key {
+            return Err(MaxioError::InvalidArgument(format!(
+                "upload id does not match object key: {bucket}/{key}"
+            )));
+        }
+
+        let mut entries = fs::read_dir(self.multipart_upload_path(bucket, upload_id))
+            .await
+            .map_err(|err| map_multipart_not_found(err, bucket, key, upload_id))?;
+        let mut parts = Vec::new();
+
+        while let Some(entry) = entries.next_entry().await? {
+            let file_name = entry.file_name().to_string_lossy().to_string();
+            let Some(part_suffix) = file_name.strip_prefix("part_") else {
+                continue;
+            };
+
+            let Ok(part_number) = part_suffix.parse::<i32>() else {
+                continue;
+            };
+            validate_part_number(part_number)?;
+
+            let bytes = fs::read(entry.path()).await?;
+            let size = i64::try_from(bytes.len()).map_err(|_| {
+                MaxioError::InvalidArgument(format!(
+                    "part is too large to list: {bucket}/{key} part {part_number}"
+                ))
+            })?;
+            let entry_meta = entry.metadata().await?;
+            let last_modified = filetime_to_utc(entry_meta.modified().ok()).unwrap_or_else(Utc::now);
+            let etag = format!("{:x}", Md5::digest(&bytes));
+
+            parts.push(PartInfo {
+                part_number,
+                size,
+                etag,
+                last_modified,
+            });
+        }
+
+        parts.sort_by_key(|part| part.part_number);
+        Ok(parts)
+    }
+
+    pub async fn list_multipart_uploads(
+        &self,
+        bucket: &str,
+        prefix: &str,
+    ) -> Result<Vec<MultipartUploadInfo>> {
+        validate_bucket_name(bucket)?;
+        ensure_bucket_exists(self, bucket).await?;
+
+        let multipart_root = self.multipart_root_path(bucket);
+        if !is_existing_directory(&multipart_root).await? {
+            return Ok(Vec::new());
+        }
+
+        let mut entries = fs::read_dir(multipart_root).await?;
+        let mut uploads = Vec::new();
+
+        while let Some(entry) = entries.next_entry().await? {
+            let upload_id = entry.file_name().to_string_lossy().to_string();
+            let upload_meta = match self.read_multipart_upload_meta(bucket, &upload_id).await {
+                Ok(meta) => meta,
+                Err(_) => continue,
+            };
+
+            if !upload_meta.key.starts_with(prefix) {
+                continue;
+            }
+
+            uploads.push(MultipartUploadInfo {
+                key: upload_meta.key,
+                upload_id,
+                initiated: upload_meta.initiated,
+            });
+        }
+
+        uploads.sort_by(|a, b| a.key.cmp(&b.key).then(a.upload_id.cmp(&b.upload_id)));
+        Ok(uploads)
+    }
+
     fn bucket_path(&self, bucket: &str) -> PathBuf {
         self.root_dir.join(bucket)
     }
 
     fn object_path(&self, bucket: &str, key: &str) -> PathBuf {
         self.bucket_path(bucket).join(key)
+    }
+
+    fn multipart_root_path(&self, bucket: &str) -> PathBuf {
+        self.bucket_path(bucket).join(MULTIPART_DIR_NAME)
+    }
+
+    fn multipart_upload_path(&self, bucket: &str, upload_id: &str) -> PathBuf {
+        self.multipart_root_path(bucket).join(upload_id)
+    }
+
+    fn multipart_part_path(&self, bucket: &str, upload_id: &str, part_number: i32) -> PathBuf {
+        self.multipart_upload_path(bucket, upload_id)
+            .join(format!("part_{part_number}"))
+    }
+
+    async fn read_multipart_upload_meta(&self, bucket: &str, upload_id: &str) -> Result<MultipartUploadMeta> {
+        let upload_meta_path = self
+            .multipart_upload_path(bucket, upload_id)
+            .join(MULTIPART_META_FILE_NAME);
+        let meta_bytes = fs::read(upload_meta_path)
+            .await
+            .map_err(|err| map_multipart_not_found(err, bucket, "", upload_id))?;
+        serde_json::from_slice(&meta_bytes).map_err(|err| {
+            MaxioError::InternalError(format!("failed to parse multipart upload metadata: {err}"))
+        })
     }
 
     async fn read_object(&self, bucket: &str, key: &str) -> Result<(ObjectInfo, XlMeta, PathBuf)> {
@@ -459,4 +781,55 @@ fn map_bucket_io_error(bucket: &str, err: std::io::Error) -> MaxioError {
 
 fn filetime_to_utc(filetime: Option<std::time::SystemTime>) -> Option<DateTime<Utc>> {
     filetime.map(DateTime::<Utc>::from)
+}
+
+fn map_multipart_not_found(err: std::io::Error, bucket: &str, key: &str, upload_id: &str) -> MaxioError {
+    if err.kind() == std::io::ErrorKind::NotFound {
+        let object_key = if key.is_empty() { "<unknown>" } else { key };
+        MaxioError::ObjectNotFound {
+            bucket: bucket.to_string(),
+            key: format!("{object_key}?uploadId={upload_id}"),
+        }
+    } else {
+        MaxioError::Io(err)
+    }
+}
+
+fn validate_part_number(part_number: i32) -> Result<()> {
+    if (1..=10_000).contains(&part_number) {
+        Ok(())
+    } else {
+        Err(MaxioError::InvalidArgument(format!(
+            "invalid part number: {part_number}"
+        )))
+    }
+}
+
+fn normalize_etag(etag: &str) -> String {
+    let trimmed = etag.trim();
+    if trimmed.starts_with('"') && trimmed.ends_with('"') && trimmed.len() >= 2 {
+        trimmed[1..trimmed.len() - 1].to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn decode_md5_hex(etag: &str) -> Result<[u8; 16]> {
+    if etag.len() != 32 {
+        return Err(MaxioError::InvalidArgument(format!(
+            "invalid part etag format: {etag}"
+        )));
+    }
+
+    let mut out = [0_u8; 16];
+    for idx in 0..16 {
+        let start = idx * 2;
+        let end = start + 2;
+        let byte = u8::from_str_radix(&etag[start..end], 16).map_err(|_| {
+            MaxioError::InvalidArgument(format!("invalid part etag format: {etag}"))
+        })?;
+        out[idx] = byte;
+    }
+
+    Ok(out)
 }

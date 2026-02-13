@@ -1,17 +1,20 @@
 use std::{collections::HashMap, sync::Arc};
 
 use axum::{
-    extract::{Path, Query, State},
+    extract::{DefaultBodyLimit, Path, Query, State},
     response::Response,
     routing::{get, put},
     Router,
 };
 use maxio_auth::{credentials::CredentialProvider, middleware::AuthLayer};
+use maxio_common::error::MaxioError;
 use maxio_storage::traits::ObjectLayer;
 
 use crate::handlers;
 
 use crate::error::S3Error;
+
+const MAX_BODY_SIZE: usize = 5 * 1024 * 1024 * 1024; // 5GB
 
 async fn get_bucket_dispatch(
     State(store): State<Arc<dyn ObjectLayer>>,
@@ -20,10 +23,76 @@ async fn get_bucket_dispatch(
 ) -> Result<Response, S3Error> {
     if query.contains_key("location") {
         handlers::bucket::get_bucket_location(State(store), Path(bucket)).await
+    } else if query.contains_key("uploads") {
+        handlers::multipart::list_multipart_uploads(State(store), Path(bucket), Query(query)).await
     } else if query.get("list-type").is_some_and(|v| v == "2") {
         handlers::object::list_objects_v2(State(store), Path(bucket), Query(query)).await
     } else {
         handlers::object::list_objects_v1(State(store), Path(bucket), Query(query)).await
+    }
+}
+
+async fn put_object_dispatch(
+    State(store): State<Arc<dyn ObjectLayer>>,
+    Path((bucket, key)): Path<(String, String)>,
+    Query(query): Query<HashMap<String, String>>,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<Response, S3Error> {
+    if query.contains_key("uploadId") && query.contains_key("partNumber") {
+        handlers::multipart::upload_part(State(store), Path((bucket, key)), Query(query), body).await
+    } else {
+        handlers::object::put_object(State(store), Path((bucket, key)), headers, body).await
+    }
+}
+
+async fn post_object_dispatch(
+    State(store): State<Arc<dyn ObjectLayer>>,
+    Path((bucket, key)): Path<(String, String)>,
+    Query(query): Query<HashMap<String, String>>,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<Response, S3Error> {
+    if query.contains_key("uploads") {
+        handlers::multipart::create_multipart_upload(State(store), Path((bucket, key)), headers).await
+    } else if query.contains_key("uploadId") {
+        handlers::multipart::complete_multipart_upload(
+            State(store),
+            Path((bucket, key)),
+            Query(query),
+            headers,
+            body,
+        )
+        .await
+    } else {
+        Err(S3Error::from(MaxioError::NotImplemented(
+            "unsupported POST operation for object route".to_string(),
+        )))
+    }
+}
+
+async fn get_object_dispatch(
+    State(store): State<Arc<dyn ObjectLayer>>,
+    Path((bucket, key)): Path<(String, String)>,
+    Query(query): Query<HashMap<String, String>>,
+) -> Result<Response, S3Error> {
+    if query.contains_key("uploadId") {
+        handlers::multipart::list_parts(State(store), Path((bucket, key)), Query(query)).await
+    } else {
+        handlers::object::get_object(State(store), Path((bucket, key))).await
+    }
+}
+
+async fn delete_object_dispatch(
+    State(store): State<Arc<dyn ObjectLayer>>,
+    Path((bucket, key)): Path<(String, String)>,
+    Query(query): Query<HashMap<String, String>>,
+) -> Result<Response, S3Error> {
+    if query.contains_key("uploadId") {
+        handlers::multipart::abort_multipart_upload(State(store), Path((bucket, key)), Query(query))
+            .await
+    } else {
+        handlers::object::delete_object(State(store), Path((bucket, key))).await
     }
 }
 
@@ -42,12 +111,14 @@ pub fn s3_router(
         )
         .route(
             "/{bucket}/{*key}",
-            put(handlers::object::put_object)
-                .get(handlers::object::get_object)
+            put(put_object_dispatch)
+                .post(post_object_dispatch)
+                .get(get_object_dispatch)
                 .head(handlers::object::head_object)
-                .delete(handlers::object::delete_object),
+                .delete(delete_object_dispatch),
         );
 
-    app.layer(AuthLayer::new(credential_provider))
+    app.layer(DefaultBodyLimit::max(MAX_BODY_SIZE))
+        .layer(AuthLayer::new(credential_provider))
         .with_state(object_layer)
 }
