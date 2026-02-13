@@ -23,12 +23,29 @@ async fn get_bucket_dispatch(
 ) -> Result<Response, S3Error> {
     if query.contains_key("location") {
         handlers::bucket::get_bucket_location(State(store), Path(bucket)).await
+    } else if query.contains_key("versioning") {
+        handlers::versioning::get_bucket_versioning(State(store), Path(bucket)).await
+    } else if query.contains_key("versions") {
+        handlers::versioning::list_object_versions(State(store), Path(bucket), Query(query)).await
     } else if query.contains_key("uploads") {
         handlers::multipart::list_multipart_uploads(State(store), Path(bucket), Query(query)).await
     } else if query.get("list-type").is_some_and(|v| v == "2") {
         handlers::object::list_objects_v2(State(store), Path(bucket), Query(query)).await
     } else {
         handlers::object::list_objects_v1(State(store), Path(bucket), Query(query)).await
+    }
+}
+
+async fn put_bucket_dispatch(
+    State(store): State<Arc<dyn ObjectLayer>>,
+    Path(bucket): Path<String>,
+    Query(query): Query<HashMap<String, String>>,
+    body: axum::body::Bytes,
+) -> Result<Response, S3Error> {
+    if query.contains_key("versioning") {
+        handlers::versioning::put_bucket_versioning(State(store), Path(bucket), body).await
+    } else {
+        handlers::bucket::make_bucket(State(store), Path(bucket)).await
     }
 }
 
@@ -80,7 +97,7 @@ async fn get_object_dispatch(
     if query.contains_key("uploadId") {
         handlers::multipart::list_parts(State(store), Path((bucket, key)), Query(query)).await
     } else {
-        handlers::object::get_object(State(store), Path((bucket, key)), headers).await
+        handlers::object::get_object(State(store), Path((bucket, key)), Query(query), headers).await
     }
 }
 
@@ -93,7 +110,7 @@ async fn delete_object_dispatch(
         handlers::multipart::abort_multipart_upload(State(store), Path((bucket, key)), Query(query))
             .await
     } else {
-        handlers::object::delete_object(State(store), Path((bucket, key))).await
+        handlers::object::delete_object(State(store), Path((bucket, key)), Query(query)).await
     }
 }
 
@@ -105,7 +122,7 @@ pub fn s3_router(
         .route("/", get(handlers::bucket::list_buckets))
         .route(
             "/{bucket}",
-            put(handlers::bucket::make_bucket)
+            put(put_bucket_dispatch)
                 .head(handlers::bucket::head_bucket)
                 .delete(handlers::bucket::delete_bucket)
                 .get(get_bucket_dispatch),

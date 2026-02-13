@@ -7,7 +7,8 @@ use maxio_common::error::Result;
 use maxio_common::types::{BucketInfo, ObjectInfo};
 
 use crate::traits::{
-    CompletePart, ListObjectsResult, MultipartUploadInfo, ObjectLayer, PartInfo,
+    CompletePart, ListObjectsResult, MultipartUploadInfo, ObjectLayer, ObjectVersion, PartInfo,
+    VersioningState,
 };
 use crate::xl::storage::XlStorage;
 
@@ -41,6 +42,14 @@ impl ObjectLayer for SingleDiskObjectLayer {
         self.storage.delete_bucket(bucket).await
     }
 
+    async fn get_bucket_versioning(&self, bucket: &str) -> Result<VersioningState> {
+        self.storage.get_bucket_versioning(bucket).await
+    }
+
+    async fn set_bucket_versioning(&self, bucket: &str, state: VersioningState) -> Result<()> {
+        self.storage.set_bucket_versioning(bucket, state).await
+    }
+
     async fn put_object(
         &self,
         bucket: &str,
@@ -58,12 +67,27 @@ impl ObjectLayer for SingleDiskObjectLayer {
         self.storage.get_object(bucket, key).await
     }
 
+    async fn get_object_version(
+        &self,
+        bucket: &str,
+        key: &str,
+        version_id: &str,
+    ) -> Result<(ObjectInfo, Bytes)> {
+        self.storage.get_object_version(bucket, key, version_id).await
+    }
+
     async fn get_object_info(&self, bucket: &str, key: &str) -> Result<ObjectInfo> {
         self.storage.get_object_info(bucket, key).await
     }
 
     async fn delete_object(&self, bucket: &str, key: &str) -> Result<()> {
         self.storage.delete_object(bucket, key).await
+    }
+
+    async fn delete_object_version(&self, bucket: &str, key: &str, version_id: &str) -> Result<()> {
+        self.storage
+            .delete_object_version(bucket, key, version_id)
+            .await
     }
 
     async fn list_objects(
@@ -76,6 +100,17 @@ impl ObjectLayer for SingleDiskObjectLayer {
     ) -> Result<ListObjectsResult> {
         self.storage
             .list_objects(bucket, prefix, marker, delimiter, max_keys)
+            .await
+    }
+
+    async fn list_object_versions(
+        &self,
+        bucket: &str,
+        prefix: &str,
+        max_keys: i32,
+    ) -> Result<Vec<ObjectVersion>> {
+        self.storage
+            .list_object_versions(bucket, prefix, max_keys)
             .await
     }
 

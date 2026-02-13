@@ -10,7 +10,9 @@ use serde::{Deserialize, Serialize};
 use tokio::fs;
 use uuid::Uuid;
 
-use crate::traits::{CompletePart, ListObjectsResult, MultipartUploadInfo, PartInfo};
+use crate::traits::{
+    CompletePart, ListObjectsResult, MultipartUploadInfo, ObjectVersion, PartInfo, VersioningState,
+};
 
 const SYS_DIR_NAME: &str = ".maxio.sys";
 const META_FILE_NAME: &str = "xl.meta";
@@ -18,6 +20,9 @@ const DATA_PART_FILE_NAME: &str = "part.1";
 const DEFAULT_CONTENT_TYPE: &str = "application/octet-stream";
 const MULTIPART_DIR_NAME: &str = ".multipart";
 const MULTIPART_META_FILE_NAME: &str = "upload.json";
+const VERSIONING_FILE_NAME: &str = ".versioning.json";
+const VERSIONS_INDEX_FILE_NAME: &str = ".versions.json";
+const NULL_VERSION_ID: &str = "null";
 
 #[derive(Debug, Clone)]
 pub struct XlStorage {
@@ -33,6 +38,17 @@ struct XlMeta {
     content_type: String,
     mod_time: DateTime<Utc>,
     metadata: HashMap<String, String>,
+    version_id: Option<String>,
+    is_delete_marker: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct VersionIndexEntry {
+    version_id: String,
+    is_delete_marker: bool,
+    last_modified: DateTime<Utc>,
+    etag: Option<String>,
+    size: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -74,6 +90,8 @@ impl XlStorage {
         }
 
         fs::create_dir_all(bucket_path).await?;
+        self.set_bucket_versioning(bucket, VersioningState::Unversioned)
+            .await?;
         Ok(())
     }
 
@@ -146,6 +164,26 @@ impl XlStorage {
         Ok(())
     }
 
+    pub async fn get_bucket_versioning(&self, bucket: &str) -> Result<VersioningState> {
+        validate_bucket_name(bucket)?;
+        ensure_bucket_exists(self, bucket).await?;
+        self.read_bucket_versioning(bucket).await
+    }
+
+    pub async fn set_bucket_versioning(&self, bucket: &str, state: VersioningState) -> Result<()> {
+        validate_bucket_name(bucket)?;
+        let bucket_path = self.bucket_path(bucket);
+        if !is_existing_directory(&bucket_path).await? {
+            return Err(MaxioError::BucketNotFound(bucket.to_string()));
+        }
+
+        let bytes = serde_json::to_vec(&state).map_err(|err| {
+            MaxioError::InternalError(format!("failed to serialize versioning state: {err}"))
+        })?;
+        fs::write(bucket_path.join(VERSIONING_FILE_NAME), bytes).await?;
+        Ok(())
+    }
+
     pub async fn put_object(
         &self,
         bucket: &str,
@@ -157,16 +195,7 @@ impl XlStorage {
         validate_bucket_name(bucket)?;
         validate_object_key(key)?;
         ensure_bucket_exists(self, bucket).await?;
-
-        let object_path = self.object_path(bucket, key);
-        if is_existing_directory(&object_path).await? {
-            fs::remove_dir_all(&object_path).await?;
-        }
-
-        let data_dir = Uuid::new_v4().to_string();
-        let data_path = object_path.join(&data_dir);
-        fs::create_dir_all(&data_path).await?;
-
+        let state = self.read_bucket_versioning(bucket).await?;
         let size = i64::try_from(data.len()).map_err(|_| {
             MaxioError::InvalidArgument(format!("object is too large to store: {bucket}/{key}"))
         })?;
@@ -174,35 +203,152 @@ impl XlStorage {
         let mod_time = Utc::now();
         let content_type = content_type.unwrap_or(DEFAULT_CONTENT_TYPE).to_string();
 
-        let xl_meta = XlMeta {
-            version: "1.0".to_string(),
-            data_dir: data_dir.clone(),
-            size,
-            etag: etag.clone(),
-            content_type: content_type.clone(),
-            mod_time,
-            metadata: metadata.clone(),
-        };
+        match state {
+            VersioningState::Unversioned => {
+                let object_path = self.object_path(bucket, key);
+                if is_existing_directory(&object_path).await? {
+                    fs::remove_dir_all(&object_path).await?;
+                }
 
-        fs::write(data_path.join(DATA_PART_FILE_NAME), data).await?;
-        let meta_json = serde_json::to_vec(&xl_meta)
-            .map_err(|err| MaxioError::InternalError(format!("failed to serialize xl.meta: {err}")))?;
-        fs::write(object_path.join(META_FILE_NAME), meta_json).await?;
+                let data_dir = Uuid::new_v4().to_string();
+                let data_path = object_path.join(&data_dir);
+                fs::create_dir_all(&data_path).await?;
 
-        Ok(ObjectInfo {
-            bucket: bucket.to_string(),
-            key: key.to_string(),
-            size,
-            etag,
-            content_type,
-            last_modified: mod_time,
-            metadata,
-            version_id: None,
-        })
+                let xl_meta = XlMeta {
+                    version: "1.0".to_string(),
+                    data_dir: data_dir.clone(),
+                    size,
+                    etag: etag.clone(),
+                    content_type: content_type.clone(),
+                    mod_time,
+                    metadata: metadata.clone(),
+                    version_id: None,
+                    is_delete_marker: false,
+                };
+
+                fs::write(data_path.join(DATA_PART_FILE_NAME), data).await?;
+                self.write_xl_meta(&object_path.join(META_FILE_NAME), &xl_meta).await?;
+
+                Ok(ObjectInfo {
+                    bucket: bucket.to_string(),
+                    key: key.to_string(),
+                    size,
+                    etag,
+                    content_type,
+                    last_modified: mod_time,
+                    metadata,
+                    version_id: None,
+                })
+            }
+            VersioningState::Enabled | VersioningState::Suspended => {
+                let object_path = self.object_path(bucket, key);
+                let mut versions = self.ensure_versions_index(bucket, key).await?;
+
+                let version_id = if state == VersioningState::Enabled {
+                    Uuid::new_v4().to_string()
+                } else {
+                    NULL_VERSION_ID.to_string()
+                };
+
+                if state == VersioningState::Suspended {
+                    versions.retain(|entry| entry.version_id != version_id);
+                    self.remove_version_dir_if_exists(&object_path, &version_id).await?;
+                }
+
+                let data_dir = Uuid::new_v4().to_string();
+                let version_path = object_path.join(&version_id);
+                let data_path = version_path.join(&data_dir);
+                fs::create_dir_all(&data_path).await?;
+
+                let xl_meta = XlMeta {
+                    version: "1.0".to_string(),
+                    data_dir,
+                    size,
+                    etag: etag.clone(),
+                    content_type: content_type.clone(),
+                    mod_time,
+                    metadata: metadata.clone(),
+                    version_id: Some(version_id.clone()),
+                    is_delete_marker: false,
+                };
+
+                fs::write(data_path.join(DATA_PART_FILE_NAME), data).await?;
+                self.write_xl_meta(&version_path.join(META_FILE_NAME), &xl_meta)
+                    .await?;
+
+                versions.insert(
+                    0,
+                    VersionIndexEntry {
+                        version_id: version_id.clone(),
+                        is_delete_marker: false,
+                        last_modified: mod_time,
+                        etag: Some(etag.clone()),
+                        size,
+                    },
+                );
+                self.write_versions_index(&object_path, &versions).await?;
+
+                Ok(ObjectInfo {
+                    bucket: bucket.to_string(),
+                    key: key.to_string(),
+                    size,
+                    etag,
+                    content_type,
+                    last_modified: mod_time,
+                    metadata,
+                    version_id: Some(version_id),
+                })
+            }
+        }
     }
 
     pub async fn get_object(&self, bucket: &str, key: &str) -> Result<(ObjectInfo, Bytes)> {
-        let (object_info, xl_meta, object_path) = self.read_object(bucket, key).await?;
+        let state = self.read_bucket_versioning(bucket).await?;
+        if state == VersioningState::Unversioned {
+            let (object_info, xl_meta, object_path) = self.read_object(bucket, key).await?;
+            let data_path = object_path.join(xl_meta.data_dir).join(DATA_PART_FILE_NAME);
+            let data = fs::read(data_path)
+                .await
+                .map_err(|_| MaxioError::ObjectNotFound {
+                    bucket: bucket.to_string(),
+                    key: key.to_string(),
+                })?;
+            return Ok((object_info, Bytes::from(data)));
+        }
+
+        let versions = self.ensure_versions_index(bucket, key).await?;
+        for entry in versions {
+            if entry.is_delete_marker {
+                continue;
+            }
+
+            return self.get_object_version(bucket, key, &entry.version_id).await;
+        }
+
+        Err(MaxioError::ObjectNotFound {
+            bucket: bucket.to_string(),
+            key: key.to_string(),
+        })
+    }
+
+    pub async fn get_object_version(
+        &self,
+        bucket: &str,
+        key: &str,
+        version_id: &str,
+    ) -> Result<(ObjectInfo, Bytes)> {
+        validate_bucket_name(bucket)?;
+        validate_object_key(key)?;
+        ensure_bucket_exists(self, bucket).await?;
+
+        let (object_info, xl_meta, object_path) = self.read_object_version_meta(bucket, key, version_id).await?;
+        if xl_meta.is_delete_marker {
+            return Err(MaxioError::ObjectNotFound {
+                bucket: bucket.to_string(),
+                key: key.to_string(),
+            });
+        }
+
         let data_path = object_path.join(xl_meta.data_dir).join(DATA_PART_FILE_NAME);
         let data = fs::read(data_path)
             .await
@@ -215,7 +361,7 @@ impl XlStorage {
     }
 
     pub async fn get_object_info(&self, bucket: &str, key: &str) -> Result<ObjectInfo> {
-        let (object_info, _, _) = self.read_object(bucket, key).await?;
+        let (object_info, _) = self.get_object(bucket, key).await?;
         Ok(object_info)
     }
 
@@ -223,6 +369,21 @@ impl XlStorage {
         validate_bucket_name(bucket)?;
         validate_object_key(key)?;
         ensure_bucket_exists(self, bucket).await?;
+
+        let state = self.read_bucket_versioning(bucket).await?;
+        if state != VersioningState::Enabled {
+            let object_path = self.object_path(bucket, key);
+            if !is_existing_directory(&object_path).await? {
+                return Err(MaxioError::ObjectNotFound {
+                    bucket: bucket.to_string(),
+                    key: key.to_string(),
+                });
+            }
+
+            fs::remove_dir_all(&object_path).await?;
+            self.cleanup_empty_parents(bucket, &object_path).await?;
+            return Ok(());
+        }
 
         let object_path = self.object_path(bucket, key);
         if !is_existing_directory(&object_path).await? {
@@ -232,25 +393,73 @@ impl XlStorage {
             });
         }
 
-        fs::remove_dir_all(&object_path).await?;
+        let mut versions = self.ensure_versions_index(bucket, key).await?;
+        let version_id = Uuid::new_v4().to_string();
+        let mod_time = Utc::now();
+        let marker_meta = XlMeta {
+            version: "1.0".to_string(),
+            data_dir: String::new(),
+            size: 0,
+            etag: String::new(),
+            content_type: DEFAULT_CONTENT_TYPE.to_string(),
+            mod_time,
+            metadata: HashMap::new(),
+            version_id: Some(version_id.clone()),
+            is_delete_marker: true,
+        };
+        let marker_path = object_path.join(&version_id);
+        fs::create_dir_all(&marker_path).await?;
+        self.write_xl_meta(&marker_path.join(META_FILE_NAME), &marker_meta)
+            .await?;
 
-        let bucket_path = self.bucket_path(bucket);
-        let mut current = object_path.parent().map(Path::to_path_buf);
-        while let Some(dir) = current {
-            if dir == bucket_path {
-                break;
-            }
-            match fs::read_dir(&dir).await {
-                Ok(mut entries) => {
-                    if entries.next_entry().await?.is_none() {
-                        let _ = fs::remove_dir(&dir).await;
-                    } else {
-                        break;
-                    }
-                }
-                Err(_) => break,
-            }
-            current = dir.parent().map(Path::to_path_buf);
+        versions.insert(
+            0,
+            VersionIndexEntry {
+                version_id,
+                is_delete_marker: true,
+                last_modified: mod_time,
+                etag: None,
+                size: 0,
+            },
+        );
+        self.write_versions_index(&object_path, &versions).await?;
+
+        Ok(())
+    }
+
+    pub async fn delete_object_version(&self, bucket: &str, key: &str, version_id: &str) -> Result<()> {
+        validate_bucket_name(bucket)?;
+        validate_object_key(key)?;
+        ensure_bucket_exists(self, bucket).await?;
+        if version_id.is_empty() {
+            return Err(MaxioError::InvalidArgument("version_id cannot be empty".to_string()));
+        }
+
+        let object_path = self.object_path(bucket, key);
+        if !is_existing_directory(&object_path).await? {
+            return Err(MaxioError::ObjectNotFound {
+                bucket: bucket.to_string(),
+                key: key.to_string(),
+            });
+        }
+
+        let mut versions = self.ensure_versions_index(bucket, key).await?;
+        let original_len = versions.len();
+        versions.retain(|entry| entry.version_id != version_id);
+
+        if versions.len() == original_len {
+            return Err(MaxioError::ObjectNotFound {
+                bucket: bucket.to_string(),
+                key: format!("{key}?versionId={version_id}"),
+            });
+        }
+
+        self.remove_version_dir_if_exists(&object_path, version_id).await?;
+        if versions.is_empty() {
+            self.remove_versions_index_if_exists(&object_path).await?;
+            self.cleanup_empty_parents(bucket, &object_path).await?;
+        } else {
+            self.write_versions_index(&object_path, &versions).await?;
         }
 
         Ok(())
@@ -268,49 +477,17 @@ impl XlStorage {
         ensure_bucket_exists(self, bucket).await?;
 
         let bucket_path = self.bucket_path(bucket);
-        let mut dirs = vec![bucket_path.clone()];
+        let object_roots = self.collect_object_roots(&bucket_path).await?;
         let mut objects = Vec::new();
 
-        while let Some(dir_path) = dirs.pop() {
-            let mut entries = fs::read_dir(&dir_path).await?;
-            while let Some(entry) = entries.next_entry().await? {
-                let path = entry.path();
-                let metadata = entry.metadata().await?;
-                if metadata.is_dir() {
-                    dirs.push(path);
-                    continue;
-                }
-
-                if entry.file_name() != META_FILE_NAME {
-                    continue;
-                }
-
-                let object_dir = match path.parent() {
-                    Some(parent) => parent,
-                    None => continue,
-                };
-
-                let rel = match object_dir.strip_prefix(&bucket_path) {
-                    Ok(value) => value,
-                    Err(_) => continue,
-                };
-                let object_key = rel.to_string_lossy().replace('\\', "/");
-
-                let meta_bytes = fs::read(path).await?;
-                let xl_meta: XlMeta = serde_json::from_slice(&meta_bytes).map_err(|err| {
-                    MaxioError::InternalError(format!("failed to parse xl.meta during list: {err}"))
-                })?;
-
-                objects.push(ObjectInfo {
-                    bucket: bucket.to_string(),
-                    key: object_key,
-                    size: xl_meta.size,
-                    etag: xl_meta.etag,
-                    content_type: xl_meta.content_type,
-                    last_modified: xl_meta.mod_time,
-                    metadata: xl_meta.metadata,
-                    version_id: None,
-                });
+        for object_root in object_roots {
+            let rel = match object_root.strip_prefix(&bucket_path) {
+                Ok(value) => value,
+                Err(_) => continue,
+            };
+            let object_key = rel.to_string_lossy().replace('\\', "/");
+            if let Some(object_info) = self.latest_visible_object(bucket, &object_key, &object_root).await? {
+                objects.push(object_info);
             }
         }
 
@@ -373,6 +550,74 @@ impl XlStorage {
             is_truncated,
             next_marker: selected.last().map(|entry| entry.marker().to_string()),
         })
+    }
+
+    pub async fn list_object_versions(
+        &self,
+        bucket: &str,
+        prefix: &str,
+        max_keys: i32,
+    ) -> Result<Vec<ObjectVersion>> {
+        validate_bucket_name(bucket)?;
+        ensure_bucket_exists(self, bucket).await?;
+
+        let bucket_path = self.bucket_path(bucket);
+        let object_roots = self.collect_object_roots(&bucket_path).await?;
+        let mut versions = Vec::new();
+
+        for object_root in object_roots {
+            let rel = match object_root.strip_prefix(&bucket_path) {
+                Ok(value) => value,
+                Err(_) => continue,
+            };
+            let object_key = rel.to_string_lossy().replace('\\', "/");
+            if !object_key.starts_with(prefix) {
+                continue;
+            }
+
+            let entries = self.read_versions_index(&object_root).await?;
+            if entries.is_empty() {
+                let legacy_meta_path = object_root.join(META_FILE_NAME);
+                if let Some(meta) = self.read_xl_meta_if_exists(&legacy_meta_path).await? {
+                    versions.push(ObjectVersion {
+                        key: object_key,
+                        version_id: NULL_VERSION_ID.to_string(),
+                        is_latest: true,
+                        is_delete_marker: false,
+                        last_modified: meta.mod_time,
+                        etag: Some(meta.etag),
+                        size: meta.size,
+                    });
+                }
+                continue;
+            }
+
+            for (idx, entry) in entries.into_iter().enumerate() {
+                versions.push(ObjectVersion {
+                    key: object_key.clone(),
+                    version_id: entry.version_id,
+                    is_latest: idx == 0,
+                    is_delete_marker: entry.is_delete_marker,
+                    last_modified: entry.last_modified,
+                    etag: entry.etag,
+                    size: entry.size,
+                });
+            }
+        }
+
+        versions.sort_by(|a, b| {
+            a.key
+                .cmp(&b.key)
+                .then(b.last_modified.cmp(&a.last_modified))
+                .then(a.version_id.cmp(&b.version_id))
+        });
+
+        if max_keys > 0 {
+            let limit = usize::try_from(max_keys).unwrap_or(usize::MAX);
+            versions.truncate(limit);
+        }
+
+        Ok(versions)
     }
 
     pub async fn create_multipart_upload(
@@ -512,49 +757,26 @@ impl XlStorage {
         }
 
         let final_etag = format!("{:x}-{}", Md5::digest(&final_etag_material), parts.len());
-        let mod_time = Utc::now();
-        let size = i64::try_from(output.len()).map_err(|_| {
-            MaxioError::InvalidArgument(format!("object is too large to store: {bucket}/{key}"))
-        })?;
         let content_type = upload_meta
             .content_type
             .unwrap_or_else(|| DEFAULT_CONTENT_TYPE.to_string());
 
-        let object_path = self.object_path(bucket, key);
-        if is_existing_directory(&object_path).await? {
-            fs::remove_dir_all(&object_path).await?;
-        }
-
-        let data_dir = Uuid::new_v4().to_string();
-        let data_path = object_path.join(&data_dir);
-        fs::create_dir_all(&data_path).await?;
-
-        fs::write(data_path.join(DATA_PART_FILE_NAME), &output).await?;
-        let xl_meta = XlMeta {
-            version: "1.0".to_string(),
-            data_dir,
-            size,
-            etag: final_etag.clone(),
-            content_type: content_type.clone(),
-            mod_time,
-            metadata: upload_meta.metadata.clone(),
-        };
-        let meta_json = serde_json::to_vec(&xl_meta)
-            .map_err(|err| MaxioError::InternalError(format!("failed to serialize xl.meta: {err}")))?;
-        fs::write(object_path.join(META_FILE_NAME), meta_json).await?;
+        let mut object_info = self
+            .put_object(
+                bucket,
+                key,
+                Bytes::from(output),
+                Some(&content_type),
+                upload_meta.metadata.clone(),
+            )
+            .await?;
+        self.update_object_etag(bucket, key, object_info.version_id.as_deref(), &final_etag)
+            .await?;
 
         self.abort_multipart_upload(bucket, key, upload_id).await?;
 
-        Ok(ObjectInfo {
-            bucket: bucket.to_string(),
-            key: key.to_string(),
-            size,
-            etag: final_etag,
-            content_type,
-            last_modified: mod_time,
-            metadata: upload_meta.metadata,
-            version_id: None,
-        })
+        object_info.etag = final_etag;
+        Ok(object_info)
     }
 
     pub async fn abort_multipart_upload(&self, bucket: &str, key: &str, upload_id: &str) -> Result<()> {
@@ -711,7 +933,47 @@ impl XlStorage {
         let xl_meta: XlMeta = serde_json::from_slice(&meta_bytes)
             .map_err(|err| MaxioError::InternalError(format!("failed to parse xl.meta: {err}")))?;
 
-        let object_info = ObjectInfo {
+        let object_info = self.meta_to_object_info(bucket, key, &xl_meta);
+        Ok((object_info, xl_meta, object_path))
+    }
+
+    async fn read_object_version_meta(
+        &self,
+        bucket: &str,
+        key: &str,
+        version_id: &str,
+    ) -> Result<(ObjectInfo, XlMeta, PathBuf)> {
+        let object_path = self.object_path(bucket, key);
+
+        if version_id == NULL_VERSION_ID {
+            let legacy_meta_path = object_path.join(META_FILE_NAME);
+            if let Some(meta) = self.read_xl_meta_if_exists(&legacy_meta_path).await? {
+                let mut info = self.meta_to_object_info(bucket, key, &meta);
+                info.version_id = Some(NULL_VERSION_ID.to_string());
+                return Ok((info, meta, object_path));
+            }
+        }
+
+        let version_path = object_path.join(version_id);
+        let meta_path = version_path.join(META_FILE_NAME);
+        let meta = self
+            .read_xl_meta_if_exists(&meta_path)
+            .await?
+            .ok_or_else(|| MaxioError::ObjectNotFound {
+                bucket: bucket.to_string(),
+                key: format!("{key}?versionId={version_id}"),
+            })?;
+
+        let mut info = self.meta_to_object_info(bucket, key, &meta);
+        info.version_id = meta
+            .version_id
+            .clone()
+            .or_else(|| Some(version_id.to_string()));
+        Ok((info, meta, version_path))
+    }
+
+    fn meta_to_object_info(&self, bucket: &str, key: &str, xl_meta: &XlMeta) -> ObjectInfo {
+        ObjectInfo {
             bucket: bucket.to_string(),
             key: key.to_string(),
             size: xl_meta.size,
@@ -719,10 +981,269 @@ impl XlStorage {
             content_type: xl_meta.content_type.clone(),
             last_modified: xl_meta.mod_time,
             metadata: xl_meta.metadata.clone(),
-            version_id: None,
+            version_id: xl_meta.version_id.clone(),
+        }
+    }
+
+    async fn read_bucket_versioning(&self, bucket: &str) -> Result<VersioningState> {
+        let path = self.bucket_path(bucket).join(VERSIONING_FILE_NAME);
+        match fs::read(path).await {
+            Ok(bytes) => serde_json::from_slice(&bytes).map_err(|err| {
+                MaxioError::InternalError(format!("failed to parse bucket versioning state: {err}"))
+            }),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(VersioningState::Unversioned),
+            Err(err) => Err(MaxioError::Io(err)),
+        }
+    }
+
+    async fn read_xl_meta_if_exists(&self, path: &Path) -> Result<Option<XlMeta>> {
+        match fs::read(path).await {
+            Ok(bytes) => {
+                let meta: XlMeta = serde_json::from_slice(&bytes).map_err(|err| {
+                    MaxioError::InternalError(format!("failed to parse xl.meta: {err}"))
+                })?;
+                Ok(Some(meta))
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(err) => Err(MaxioError::Io(err)),
+        }
+    }
+
+    async fn write_xl_meta(&self, path: &Path, meta: &XlMeta) -> Result<()> {
+        let bytes = serde_json::to_vec(meta)
+            .map_err(|err| MaxioError::InternalError(format!("failed to serialize xl.meta: {err}")))?;
+        fs::write(path, bytes).await?;
+        Ok(())
+    }
+
+    async fn read_versions_index(&self, object_path: &Path) -> Result<Vec<VersionIndexEntry>> {
+        let path = object_path.join(VERSIONS_INDEX_FILE_NAME);
+        match fs::read(path).await {
+            Ok(bytes) => serde_json::from_slice(&bytes).map_err(|err| {
+                MaxioError::InternalError(format!("failed to parse versions index: {err}"))
+            }),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+            Err(err) => Err(MaxioError::Io(err)),
+        }
+    }
+
+    async fn write_versions_index(&self, object_path: &Path, entries: &[VersionIndexEntry]) -> Result<()> {
+        fs::create_dir_all(object_path).await?;
+        let bytes = serde_json::to_vec(entries).map_err(|err| {
+            MaxioError::InternalError(format!("failed to serialize versions index: {err}"))
+        })?;
+        fs::write(object_path.join(VERSIONS_INDEX_FILE_NAME), bytes).await?;
+        Ok(())
+    }
+
+    async fn remove_versions_index_if_exists(&self, object_path: &Path) -> Result<()> {
+        match fs::remove_file(object_path.join(VERSIONS_INDEX_FILE_NAME)).await {
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(MaxioError::Io(err)),
+        }
+    }
+
+    async fn remove_version_dir_if_exists(&self, object_path: &Path, version_id: &str) -> Result<()> {
+        match fs::remove_dir_all(object_path.join(version_id)).await {
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(MaxioError::Io(err)),
+        }
+    }
+
+    async fn ensure_versions_index(&self, bucket: &str, key: &str) -> Result<Vec<VersionIndexEntry>> {
+        let object_path = self.object_path(bucket, key);
+        let entries = self.read_versions_index(&object_path).await?;
+        if !entries.is_empty() {
+            return Ok(entries);
+        }
+
+        let legacy_meta_path = object_path.join(META_FILE_NAME);
+        let Some(legacy_meta) = self.read_xl_meta_if_exists(&legacy_meta_path).await? else {
+            return Ok(Vec::new());
         };
 
-        Ok((object_info, xl_meta, object_path))
+        let mut migrated_meta = legacy_meta.clone();
+        migrated_meta.version_id = Some(NULL_VERSION_ID.to_string());
+        migrated_meta.is_delete_marker = false;
+
+        let null_version_path = object_path.join(NULL_VERSION_ID);
+        fs::create_dir_all(&null_version_path).await?;
+        let src_data = object_path
+            .join(&legacy_meta.data_dir)
+            .join(DATA_PART_FILE_NAME);
+        let dst_data = null_version_path.join(DATA_PART_FILE_NAME);
+        let data = fs::read(&src_data)
+            .await
+            .map_err(|_| MaxioError::ObjectNotFound {
+                bucket: bucket.to_string(),
+                key: key.to_string(),
+            })?;
+        fs::write(&dst_data, data).await?;
+        self.write_xl_meta(&null_version_path.join(META_FILE_NAME), &migrated_meta)
+            .await?;
+
+        match fs::remove_dir_all(object_path.join(&legacy_meta.data_dir)).await {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => return Err(MaxioError::Io(err)),
+        }
+        match fs::remove_file(&legacy_meta_path).await {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => return Err(MaxioError::Io(err)),
+        }
+
+        let out = vec![VersionIndexEntry {
+            version_id: NULL_VERSION_ID.to_string(),
+            is_delete_marker: false,
+            last_modified: migrated_meta.mod_time,
+            etag: Some(migrated_meta.etag),
+            size: migrated_meta.size,
+        }];
+        self.write_versions_index(&object_path, &out).await?;
+        Ok(out)
+    }
+
+    async fn latest_visible_object(
+        &self,
+        bucket: &str,
+        key: &str,
+        object_root: &Path,
+    ) -> Result<Option<ObjectInfo>> {
+        let versions = self.read_versions_index(object_root).await?;
+        if versions.is_empty() {
+            if let Some(meta) = self.read_xl_meta_if_exists(&object_root.join(META_FILE_NAME)).await? {
+                return Ok(Some(self.meta_to_object_info(bucket, key, &meta)));
+            }
+            return Ok(None);
+        }
+
+        for entry in versions {
+            if entry.is_delete_marker {
+                continue;
+            }
+            let (info, _, _) = self.read_object_version_meta(bucket, key, &entry.version_id).await?;
+            return Ok(Some(info));
+        }
+
+        Ok(None)
+    }
+
+    async fn collect_object_roots(&self, bucket_path: &Path) -> Result<Vec<PathBuf>> {
+        let mut stack = vec![bucket_path.to_path_buf()];
+        let mut roots = Vec::new();
+
+        while let Some(dir) = stack.pop() {
+            let mut entries = match fs::read_dir(&dir).await {
+                Ok(items) => items,
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(err) => return Err(MaxioError::Io(err)),
+            };
+
+            while let Some(entry) = entries.next_entry().await? {
+                let path = entry.path();
+                if !entry.metadata().await?.is_dir() {
+                    continue;
+                }
+
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name == MULTIPART_DIR_NAME {
+                    continue;
+                }
+
+                let has_versions = fs::metadata(path.join(VERSIONS_INDEX_FILE_NAME))
+                    .await
+                    .map(|meta| meta.is_file())
+                    .unwrap_or(false);
+                let has_legacy_meta = fs::metadata(path.join(META_FILE_NAME))
+                    .await
+                    .map(|meta| meta.is_file())
+                    .unwrap_or(false);
+
+                if has_versions || has_legacy_meta {
+                    roots.push(path);
+                } else {
+                    stack.push(path);
+                }
+            }
+        }
+
+        Ok(roots)
+    }
+
+    async fn cleanup_empty_parents(&self, bucket: &str, object_path: &Path) -> Result<()> {
+        let bucket_path = self.bucket_path(bucket);
+        let mut current = object_path.parent().map(Path::to_path_buf);
+        while let Some(dir) = current {
+            if dir == bucket_path {
+                break;
+            }
+            match fs::read_dir(&dir).await {
+                Ok(mut entries) => {
+                    if entries.next_entry().await?.is_none() {
+                        let _ = fs::remove_dir(&dir).await;
+                    } else {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+            current = dir.parent().map(Path::to_path_buf);
+        }
+
+        Ok(())
+    }
+
+    async fn update_object_etag(
+        &self,
+        bucket: &str,
+        key: &str,
+        version_id: Option<&str>,
+        etag: &str,
+    ) -> Result<()> {
+        let object_path = self.object_path(bucket, key);
+
+        match version_id {
+            Some(version_id) => {
+                let meta_path = object_path.join(version_id).join(META_FILE_NAME);
+                let mut meta = self
+                    .read_xl_meta_if_exists(&meta_path)
+                    .await?
+                    .ok_or_else(|| MaxioError::ObjectNotFound {
+                        bucket: bucket.to_string(),
+                        key: format!("{key}?versionId={version_id}"),
+                    })?;
+                meta.etag = etag.to_string();
+                self.write_xl_meta(&meta_path, &meta).await?;
+
+                let mut versions = self.read_versions_index(&object_path).await?;
+                for entry in &mut versions {
+                    if entry.version_id == version_id {
+                        entry.etag = Some(etag.to_string());
+                        break;
+                    }
+                }
+                if !versions.is_empty() {
+                    self.write_versions_index(&object_path, &versions).await?;
+                }
+            }
+            None => {
+                let meta_path = object_path.join(META_FILE_NAME);
+                let mut meta = self
+                    .read_xl_meta_if_exists(&meta_path)
+                    .await?
+                    .ok_or_else(|| MaxioError::ObjectNotFound {
+                        bucket: bucket.to_string(),
+                        key: key.to_string(),
+                    })?;
+                meta.etag = etag.to_string();
+                self.write_xl_meta(&meta_path, &meta).await?;
+            }
+        }
+
+        Ok(())
     }
 }
 

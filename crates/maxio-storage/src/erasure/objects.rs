@@ -16,7 +16,8 @@ use md5::Digest as _;
 use crate::erasure::{ErasureConfig, ErasureInfo, decode_block, encode_block};
 use crate::erasure::storage::ErasureStorage;
 use crate::traits::{
-    CompletePart, ListObjectsResult, MultipartUploadInfo, ObjectLayer, PartInfo,
+    CompletePart, ListObjectsResult, MultipartUploadInfo, ObjectLayer, ObjectVersion, PartInfo,
+    VersioningState,
 };
 
 const META_FILE_NAME: &str = "xl.meta";
@@ -235,6 +236,38 @@ impl ObjectLayer for ErasureObjectLayer {
         Ok(())
     }
 
+    async fn get_bucket_versioning(&self, bucket: &str) -> Result<VersioningState> {
+        validate_bucket_name(bucket)?;
+        self.ensure_bucket_exists_for_quorum(bucket).await?;
+
+        let staging = self.storage.shard_storage(0).ok_or_else(|| {
+            MaxioError::InternalError("missing shard 0 for versioning operations".to_string())
+        })?;
+        staging.get_bucket_versioning(bucket).await
+    }
+
+    async fn set_bucket_versioning(&self, bucket: &str, state: VersioningState) -> Result<()> {
+        validate_bucket_name(bucket)?;
+        self.ensure_bucket_exists_for_quorum(bucket).await?;
+
+        let mut changed = 0_usize;
+        for shard in self.storage.shards() {
+            if shard.storage.set_bucket_versioning(bucket, state).await.is_ok() {
+                changed += 1;
+            }
+        }
+
+        if changed < self.storage.config().data_shards {
+            return Err(MaxioError::InternalError(format!(
+                "failed to set bucket versioning quorum: wrote {}, need {}",
+                changed,
+                self.storage.config().data_shards
+            )));
+        }
+
+        Ok(())
+    }
+
     async fn put_object(
         &self,
         bucket: &str,
@@ -426,6 +459,21 @@ impl ObjectLayer for ErasureObjectLayer {
         Ok((object_info, Bytes::from(output)))
     }
 
+    async fn get_object_version(
+        &self,
+        bucket: &str,
+        key: &str,
+        version_id: &str,
+    ) -> Result<(ObjectInfo, Bytes)> {
+        validate_bucket_name(bucket)?;
+        validate_object_key(key)?;
+
+        let staging = self.storage.shard_storage(0).ok_or_else(|| {
+            MaxioError::InternalError("missing shard 0 for versioning operations".to_string())
+        })?;
+        staging.get_object_version(bucket, key, version_id).await
+    }
+
     async fn get_object_info(&self, bucket: &str, key: &str) -> Result<ObjectInfo> {
         validate_bucket_name(bucket)?;
         validate_object_key(key)?;
@@ -459,6 +507,17 @@ impl ObjectLayer for ErasureObjectLayer {
         Ok(())
     }
 
+    async fn delete_object_version(&self, bucket: &str, key: &str, version_id: &str) -> Result<()> {
+        validate_bucket_name(bucket)?;
+        validate_object_key(key)?;
+        self.ensure_bucket_exists_for_quorum(bucket).await?;
+
+        let staging = self.storage.shard_storage(0).ok_or_else(|| {
+            MaxioError::InternalError("missing shard 0 for versioning operations".to_string())
+        })?;
+        staging.delete_object_version(bucket, key, version_id).await
+    }
+
     async fn list_objects(
         &self,
         bucket: &str,
@@ -484,6 +543,21 @@ impl ObjectLayer for ErasureObjectLayer {
         Err(last_error.unwrap_or_else(|| {
             MaxioError::InternalError("no readable disks available for list_objects".to_string())
         }))
+    }
+
+    async fn list_object_versions(
+        &self,
+        bucket: &str,
+        prefix: &str,
+        max_keys: i32,
+    ) -> Result<Vec<ObjectVersion>> {
+        validate_bucket_name(bucket)?;
+        self.ensure_bucket_exists_for_quorum(bucket).await?;
+
+        let staging = self.storage.shard_storage(0).ok_or_else(|| {
+            MaxioError::InternalError("missing shard 0 for versioning operations".to_string())
+        })?;
+        staging.list_object_versions(bucket, prefix, max_keys).await
     }
 
     async fn create_multipart_upload(

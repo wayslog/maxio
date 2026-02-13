@@ -13,7 +13,7 @@ use maxio_common::{
     error::MaxioError,
     types::ObjectInfo,
 };
-use maxio_storage::traits::{ListObjectsResult, ObjectLayer};
+use maxio_storage::traits::{ListObjectsResult, ObjectLayer, VersioningState};
 use quick_xml::se::to_string as xml_to_string;
 use serde::Serialize;
 
@@ -191,9 +191,14 @@ pub async fn put_object(
 pub async fn get_object(
     State(store): State<Arc<dyn ObjectLayer>>,
     Path((bucket, key)): Path<(String, String)>,
+    Query(query): Query<HashMap<String, String>>,
     headers: HeaderMap,
 ) -> S3Result {
-    let (info, data) = store.get_object(&bucket, &key).await?;
+    let version_id = query.get("versionId").cloned().filter(|item| !item.is_empty());
+    let (info, data) = match version_id.as_deref() {
+        Some(version_id) => store.get_object_version(&bucket, &key, version_id).await?,
+        None => store.get_object(&bucket, &key).await?,
+    };
     let total_len = data.len();
 
     let range_header = headers
@@ -214,6 +219,13 @@ pub async fn get_object(
     let mut response = Response::new(Body::from(response_data));
     *response.status_mut() = status;
     write_object_headers(response.headers_mut(), &info, response_len)?;
+    if let Some(version_id) = info.version_id.as_deref() {
+        response
+            .headers_mut()
+            .insert("x-amz-version-id", HeaderValue::from_str(version_id).map_err(|err| {
+                MaxioError::InvalidArgument(format!("invalid version id header value: {err}"))
+            })?);
+    }
 
     if let Some(range_str) = content_range {
         response.headers_mut().insert(
@@ -265,8 +277,24 @@ pub async fn head_object(
 pub async fn delete_object(
     State(store): State<Arc<dyn ObjectLayer>>,
     Path((bucket, key)): Path<(String, String)>,
+    Query(query): Query<HashMap<String, String>>,
 ) -> S3Result {
+    if let Some(version_id) = query.get("versionId").filter(|item| !item.is_empty()) {
+        store.delete_object_version(&bucket, &key, version_id).await?;
+        return Ok(StatusCode::NO_CONTENT.into_response());
+    }
+
+    let versioning = store.get_bucket_versioning(&bucket).await?;
     store.delete_object(&bucket, &key).await?;
+
+    if versioning == VersioningState::Enabled {
+        return Ok((
+            StatusCode::NO_CONTENT,
+            [("x-amz-delete-marker", "true")],
+        )
+            .into_response());
+    }
+
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
