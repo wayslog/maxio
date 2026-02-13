@@ -843,6 +843,7 @@ dependencies = [
 name = "maxio-auth"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "base64",
  "chrono",
  "hex",
@@ -852,6 +853,7 @@ dependencies = [
  "percent-encoding",
  "sha2",
  "thiserror",
+ "tower",
  "tracing",
 ]
 
@@ -941,6 +943,7 @@ dependencies = [
  "http",
  "http-body-util",
  "hyper",
+ "maxio-auth",
  "maxio-common",
  "maxio-storage",
  "quick-xml",
@@ -959,6 +962,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "clap",
+ "maxio-auth",
  "maxio-common",
  "maxio-s3-api",
  "maxio-storage",

@@ -14,3 +14,5 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 percent-encoding = { workspace = true }
 http = { workspace = true }
+axum = { workspace = true }
+tower = { workspace = true }

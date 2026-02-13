@@ -1,6 +1,7 @@
 use std::{path::PathBuf, sync::Arc};
 
 use clap::Parser;
+use maxio_auth::credentials::{CredentialProvider, StaticCredentialProvider};
 use maxio_storage::{single::SingleDiskObjectLayer, traits::ObjectLayer};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
@@ -32,8 +33,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tokio::fs::create_dir_all(&data_dir).await?;
 
     let object_layer: Arc<dyn ObjectLayer> = Arc::new(SingleDiskObjectLayer::new(data_dir).await?);
+    let access_key = std::env::var("MAXIO_ROOT_USER").unwrap_or_else(|_| "minioadmin".to_string());
+    let secret_key =
+        std::env::var("MAXIO_ROOT_PASSWORD").unwrap_or_else(|_| "minioadmin".to_string());
+    let credential_provider: Arc<dyn CredentialProvider> =
+        Arc::new(StaticCredentialProvider::new(access_key, secret_key));
 
-    let app = maxio_s3_api::router::s3_router(object_layer);
+    let app = maxio_s3_api::router::s3_router(object_layer, credential_provider);
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     info!("maxio server listening on {addr}");

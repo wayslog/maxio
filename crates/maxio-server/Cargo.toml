@@ -9,6 +9,7 @@ path = "src/main.rs"
 
 [dependencies]
 maxio-common = { workspace = true }
+maxio-auth = { workspace = true }
 maxio-s3-api = { workspace = true }
 maxio-storage = { workspace = true }
 tokio = { workspace = true }

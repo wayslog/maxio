@@ -6,6 +6,7 @@ use axum::{
     routing::{get, put},
     Router,
 };
+use maxio_auth::{credentials::CredentialProvider, middleware::AuthLayer};
 use maxio_storage::traits::ObjectLayer;
 
 use crate::handlers;
@@ -26,7 +27,10 @@ async fn get_bucket_dispatch(
     }
 }
 
-pub fn s3_router(object_layer: Arc<dyn ObjectLayer>) -> Router {
+pub fn s3_router(
+    object_layer: Arc<dyn ObjectLayer>,
+    credential_provider: Arc<dyn CredentialProvider>,
+) -> Router {
     let app: Router<Arc<dyn ObjectLayer>> = Router::<Arc<dyn ObjectLayer>>::new()
         .route("/", get(handlers::bucket::list_buckets))
         .route(
@@ -44,5 +48,6 @@ pub fn s3_router(object_layer: Arc<dyn ObjectLayer>) -> Router {
                 .delete(handlers::object::delete_object),
         );
 
-    app.with_state(object_layer)
+    app.layer(AuthLayer::new(credential_provider))
+        .with_state(object_layer)
 }
