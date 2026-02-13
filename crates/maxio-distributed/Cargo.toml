@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 maxio-common = { workspace = true }
+maxio-storage = { workspace = true }
 tokio = { workspace = true }
 async-trait = { workspace = true }
 serde = { workspace = true }
@@ -15,3 +16,5 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 futures = { workspace = true }
 url = { workspace = true }
+rmp-serde = { workspace = true }
+tokio-tungstenite = "0.24"
