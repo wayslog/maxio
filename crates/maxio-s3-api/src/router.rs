@@ -75,11 +75,12 @@ async fn get_object_dispatch(
     State(store): State<Arc<dyn ObjectLayer>>,
     Path((bucket, key)): Path<(String, String)>,
     Query(query): Query<HashMap<String, String>>,
+    headers: axum::http::HeaderMap,
 ) -> Result<Response, S3Error> {
     if query.contains_key("uploadId") {
         handlers::multipart::list_parts(State(store), Path((bucket, key)), Query(query)).await
     } else {
-        handlers::object::get_object(State(store), Path((bucket, key))).await
+        handlers::object::get_object(State(store), Path((bucket, key)), headers).await
     }
 }
 

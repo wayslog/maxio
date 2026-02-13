@@ -4,7 +4,7 @@ use axum::{
     body::{Body, Bytes},
     extract::{Path, Query, State},
     http::{
-        header::{CONTENT_LENGTH, CONTENT_TYPE, ETAG, LAST_MODIFIED},
+        header::{CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE, ETAG, LAST_MODIFIED, RANGE},
         HeaderMap, HeaderName, HeaderValue, StatusCode,
     },
     response::{IntoResponse, Response},
@@ -191,13 +191,63 @@ pub async fn put_object(
 pub async fn get_object(
     State(store): State<Arc<dyn ObjectLayer>>,
     Path((bucket, key)): Path<(String, String)>,
+    headers: HeaderMap,
 ) -> S3Result {
     let (info, data) = store.get_object(&bucket, &key).await?;
-    let data_len = data.len();
-    let mut response = Response::new(Body::from(data));
-    *response.status_mut() = StatusCode::OK;
-    write_object_headers(response.headers_mut(), &info, data_len)?;
+    let total_len = data.len();
+
+    let range_header = headers
+        .get(RANGE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| parse_range_header(s, total_len));
+
+    let (status, response_data, content_range) = match range_header {
+        Some((start, end)) => {
+            let slice = data.slice(start..=end);
+            let content_range = format!("bytes {}-{}/{}", start, end, total_len);
+            (StatusCode::PARTIAL_CONTENT, slice, Some(content_range))
+        }
+        None => (StatusCode::OK, data, None),
+    };
+
+    let response_len = response_data.len();
+    let mut response = Response::new(Body::from(response_data));
+    *response.status_mut() = status;
+    write_object_headers(response.headers_mut(), &info, response_len)?;
+
+    if let Some(range_str) = content_range {
+        response.headers_mut().insert(
+            CONTENT_RANGE,
+            HeaderValue::from_str(&range_str).unwrap_or_else(|_| HeaderValue::from_static("")),
+        );
+    }
+
     Ok(response)
+}
+
+fn parse_range_header(header: &str, total_len: usize) -> Option<(usize, usize)> {
+    let header = header.strip_prefix("bytes=")?;
+    let parts: Vec<&str> = header.split('-').collect();
+    if parts.len() != 2 {
+        return None;
+    }
+
+    let start = parts[0].parse::<usize>().ok();
+    let end_str = parts[1];
+
+    match (start, end_str.is_empty()) {
+        (Some(s), true) => Some((s, total_len.saturating_sub(1))),
+        (Some(s), false) => {
+            let e = end_str.parse::<usize>().ok()?;
+            Some((s, e.min(total_len.saturating_sub(1))))
+        }
+        (None, false) => {
+            let suffix_len = end_str.parse::<usize>().ok()?;
+            let start = total_len.saturating_sub(suffix_len);
+            Some((start, total_len.saturating_sub(1)))
+        }
+        _ => None,
+    }
 }
 
 pub async fn head_object(
