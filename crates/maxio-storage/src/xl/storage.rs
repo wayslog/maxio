@@ -222,7 +222,27 @@ impl XlStorage {
             });
         }
 
-        fs::remove_dir_all(object_path).await?;
+        fs::remove_dir_all(&object_path).await?;
+
+        let bucket_path = self.bucket_path(bucket);
+        let mut current = object_path.parent().map(Path::to_path_buf);
+        while let Some(dir) = current {
+            if dir == bucket_path {
+                break;
+            }
+            match fs::read_dir(&dir).await {
+                Ok(mut entries) => {
+                    if entries.next_entry().await?.is_none() {
+                        let _ = fs::remove_dir(&dir).await;
+                    } else {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+            current = dir.parent().map(Path::to_path_buf);
+        }
+
         Ok(())
     }
 
