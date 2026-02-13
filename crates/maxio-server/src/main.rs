@@ -2,6 +2,7 @@ use std::{path::PathBuf, sync::Arc};
 
 use clap::Parser;
 use maxio_auth::credentials::{CredentialProvider, StaticCredentialProvider};
+use maxio_distributed::{ClusterConfig, DistributedSys};
 use maxio_iam::IAMSys;
 use maxio_lifecycle::{LifecycleStore, LifecycleSys};
 use maxio_notification::{NotificationStore, NotificationSys, WebhookTarget};
@@ -118,12 +119,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
     info!("lifecycle background scanner enabled");
 
+    let default_node_endpoint = format!("http://127.0.0.1:{}", cli.port);
+    let cluster_config = ClusterConfig::from_env()
+        .unwrap_or_else(|| ClusterConfig::single(default_node_endpoint));
+    let distributed_sys = Arc::new(DistributedSys::new(cluster_config).await);
+
     let app = maxio_s3_api::router::s3_router(
         object_layer,
         credential_provider,
         iam,
         notification_sys,
         lifecycle_sys,
+        distributed_sys,
     );
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;

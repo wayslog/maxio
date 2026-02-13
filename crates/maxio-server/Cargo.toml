@@ -13,6 +13,7 @@ maxio-auth = { workspace = true }
 maxio-iam = { workspace = true }
 maxio-lifecycle = { workspace = true }
 maxio-notification = { workspace = true }
+maxio-distributed = { workspace = true }
 maxio-s3-api = { workspace = true }
 maxio-storage = { workspace = true }
 tokio = { workspace = true }

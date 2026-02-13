@@ -8,6 +8,7 @@ use axum::{
 };
 use maxio_auth::{credentials::CredentialProvider, middleware::AuthLayer};
 use maxio_common::error::MaxioError;
+use maxio_distributed::DistributedSys;
 use maxio_iam::IAMSys;
 use maxio_lifecycle::LifecycleSys;
 use maxio_notification::NotificationSys;
@@ -194,6 +195,7 @@ pub fn s3_router(
     iam: Arc<IAMSys>,
     notifications: Arc<NotificationSys>,
     lifecycle: Arc<LifecycleSys>,
+    distributed: Arc<DistributedSys>,
 ) -> Router {
     let app: Router<Arc<dyn ObjectLayer>> = Router::<Arc<dyn ObjectLayer>>::new()
         .route("/minio/admin/v3/add-user", post(handlers::admin::add_user))
@@ -212,6 +214,11 @@ pub fn s3_router(
         .route(
             "/minio/admin/v3/set-user-or-group-policy",
             put(handlers::admin::set_user_or_group_policy),
+        )
+        .route("/minio/health/live", get(handlers::health::health_live))
+        .route(
+            "/minio/health/cluster",
+            get(handlers::health::health_cluster),
         )
         .route("/", get(handlers::bucket::list_buckets))
         .route(
@@ -235,5 +242,6 @@ pub fn s3_router(
         .layer(Extension(iam))
         .layer(Extension(notifications))
         .layer(Extension(lifecycle))
+        .layer(Extension(distributed))
         .with_state(object_layer)
 }
