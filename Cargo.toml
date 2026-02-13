@@ -83,3 +83,4 @@ pin-project-lite = "0.2"
 # Misc
 percent-encoding = "2"
 url = "2"
+reed-solomon-simd = "3"

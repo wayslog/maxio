@@ -2,7 +2,11 @@ use std::{path::PathBuf, sync::Arc};
 
 use clap::Parser;
 use maxio_auth::credentials::{CredentialProvider, StaticCredentialProvider};
-use maxio_storage::{single::SingleDiskObjectLayer, traits::ObjectLayer};
+use maxio_storage::{
+    erasure::{ErasureConfig, objects::ErasureObjectLayer},
+    single::SingleDiskObjectLayer,
+    traits::ObjectLayer,
+};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
@@ -17,6 +21,12 @@ struct Cli {
 
     #[arg(long, default_value = "./data")]
     data_dir: String,
+
+    #[arg(long, default_value_t = false)]
+    erasure: bool,
+
+    #[arg(long)]
+    disks: Option<String>,
 }
 
 #[tokio::main]
@@ -28,11 +38,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let cli = Cli::parse();
     let addr = format!("{}:{}", cli.host, cli.port);
-    let data_dir = PathBuf::from(&cli.data_dir);
+    let object_layer: Arc<dyn ObjectLayer> = if cli.erasure {
+        let disks = cli
+            .disks
+            .as_deref()
+            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "--disks is required when --erasure is enabled"))?;
+        let disk_paths: Vec<PathBuf> = disks
+            .split(',')
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+            .collect();
 
-    tokio::fs::create_dir_all(&data_dir).await?;
+        if disk_paths.is_empty() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "--disks must include at least one disk path",
+            )
+            .into());
+        }
 
-    let object_layer: Arc<dyn ObjectLayer> = Arc::new(SingleDiskObjectLayer::new(data_dir).await?);
+        Arc::new(ErasureObjectLayer::new(disk_paths, ErasureConfig::default()).await?)
+    } else {
+        let data_dir = PathBuf::from(&cli.data_dir);
+        tokio::fs::create_dir_all(&data_dir).await?;
+        Arc::new(SingleDiskObjectLayer::new(data_dir).await?)
+    };
     let access_key = std::env::var("MAXIO_ROOT_USER").unwrap_or_else(|_| "minioadmin".to_string());
     let secret_key =
         std::env::var("MAXIO_ROOT_PASSWORD").unwrap_or_else(|_| "minioadmin".to_string());
