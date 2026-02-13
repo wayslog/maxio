@@ -2,6 +2,7 @@ use std::{path::PathBuf, sync::Arc};
 
 use clap::Parser;
 use maxio_auth::credentials::{CredentialProvider, StaticCredentialProvider};
+use maxio_iam::IAMSys;
 use maxio_storage::{
     erasure::{ErasureConfig, objects::ErasureObjectLayer},
     single::SingleDiskObjectLayer,
@@ -67,10 +68,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let access_key = std::env::var("MAXIO_ROOT_USER").unwrap_or_else(|_| "minioadmin".to_string());
     let secret_key =
         std::env::var("MAXIO_ROOT_PASSWORD").unwrap_or_else(|_| "minioadmin".to_string());
+    let iam_data_dir = PathBuf::from(&cli.data_dir);
+    tokio::fs::create_dir_all(&iam_data_dir).await?;
+    let iam = Arc::new(IAMSys::new(&iam_data_dir).await?);
     let credential_provider: Arc<dyn CredentialProvider> =
-        Arc::new(StaticCredentialProvider::new(access_key, secret_key));
+        Arc::new(StaticCredentialProvider::with_iam(access_key, secret_key, Arc::clone(&iam)));
 
-    let app = maxio_s3_api::router::s3_router(object_layer, credential_provider);
+    let app = maxio_s3_api::router::s3_router(object_layer, credential_provider, iam);
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     info!("maxio server listening on {addr}");

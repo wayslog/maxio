@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 maxio-common = { workspace = true }
+maxio-iam = { workspace = true }
 hmac = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }

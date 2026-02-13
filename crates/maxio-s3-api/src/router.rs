@@ -1,13 +1,15 @@
 use std::{collections::HashMap, sync::Arc};
 
 use axum::{
+    Extension,
     extract::{DefaultBodyLimit, Path, Query, State},
     response::Response,
-    routing::{get, put},
+    routing::{delete, get, post, put},
     Router,
 };
 use maxio_auth::{credentials::CredentialProvider, middleware::AuthLayer};
 use maxio_common::error::MaxioError;
+use maxio_iam::IAMSys;
 use maxio_storage::traits::ObjectLayer;
 
 use crate::handlers;
@@ -117,8 +119,29 @@ async fn delete_object_dispatch(
 pub fn s3_router(
     object_layer: Arc<dyn ObjectLayer>,
     credential_provider: Arc<dyn CredentialProvider>,
+    iam: Arc<IAMSys>,
 ) -> Router {
     let app: Router<Arc<dyn ObjectLayer>> = Router::<Arc<dyn ObjectLayer>>::new()
+        .route(
+            "/minio/admin/v3/add-user",
+            post(handlers::admin::add_user),
+        )
+        .route(
+            "/minio/admin/v3/remove-user",
+            delete(handlers::admin::remove_user),
+        )
+        .route(
+            "/minio/admin/v3/list-users",
+            get(handlers::admin::list_users),
+        )
+        .route(
+            "/minio/admin/v3/add-canned-policy",
+            post(handlers::admin::add_canned_policy),
+        )
+        .route(
+            "/minio/admin/v3/set-user-or-group-policy",
+            put(handlers::admin::set_user_or_group_policy),
+        )
         .route("/", get(handlers::bucket::list_buckets))
         .route(
             "/{bucket}",
@@ -138,5 +161,6 @@ pub fn s3_router(
 
     app.layer(DefaultBodyLimit::max(MAX_BODY_SIZE))
         .layer(AuthLayer::new(credential_provider))
+        .layer(Extension(iam))
         .with_state(object_layer)
 }

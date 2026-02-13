@@ -6,6 +6,7 @@ edition.workspace = true
 [dependencies]
 maxio-common = { workspace = true }
 maxio-auth = { workspace = true }
+maxio-iam = { workspace = true }
 maxio-storage = { workspace = true }
 axum = { workspace = true }
 tokio = { workspace = true }
@@ -15,6 +16,7 @@ http-body-util = { workspace = true }
 tower = { workspace = true }
 tower-http = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 quick-xml = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }

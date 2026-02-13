@@ -73,6 +73,11 @@ where
                 .map(str::trim);
 
             let Some(auth_header) = auth_header else {
+                if req.uri().path().starts_with("/minio/admin/") {
+                    return Ok(s3_error_response(MaxioError::AccessDenied(
+                        "admin api requires signed request".to_string(),
+                    )));
+                }
                 return inner.call(req).await;
             };
 
@@ -153,9 +158,54 @@ where
                 return Ok(s3_error_response(MaxioError::SignatureDoesNotMatch));
             }
 
+            let (action, resource) = derive_action_resource(req.method().as_str(), req.uri().path());
+            if !provider.is_allowed(&parsed.access_key, &action, &resource) {
+                return Ok(s3_error_response(MaxioError::AccessDenied(
+                    "iam policy denied this operation".to_string(),
+                )));
+            }
+
             inner.call(req).await
         })
     }
+}
+
+fn derive_action_resource(method: &str, path: &str) -> (String, String) {
+    if path == "/" {
+        return ("s3:ListAllMyBuckets".to_string(), "arn:aws:s3:::*".to_string());
+    }
+
+    let trimmed = path.trim_start_matches('/');
+    let mut parts = trimmed.splitn(2, '/');
+    let bucket = parts.next().unwrap_or_default();
+    let key = parts.next();
+
+    if bucket == "minio" {
+        return (
+            format!("admin:{method}"),
+            format!("arn:aws:s3:::admin/{trimmed}"),
+        );
+    }
+
+    let action = match (method, key) {
+        ("GET", None) => "s3:ListBucket",
+        ("HEAD", None) => "s3:ListBucket",
+        ("PUT", None) => "s3:CreateBucket",
+        ("DELETE", None) => "s3:DeleteBucket",
+        ("GET", Some(_)) => "s3:GetObject",
+        ("HEAD", Some(_)) => "s3:GetObject",
+        ("PUT", Some(_)) => "s3:PutObject",
+        ("POST", Some(_)) => "s3:PutObject",
+        ("DELETE", Some(_)) => "s3:DeleteObject",
+        _ => "s3:*",
+    };
+
+    let resource = match key {
+        Some(key) if !key.is_empty() => format!("arn:aws:s3:::{bucket}/{key}"),
+        _ => format!("arn:aws:s3:::{bucket}"),
+    };
+
+    (action.to_string(), resource)
 }
 
 fn s3_error_response(error: MaxioError) -> Response {
