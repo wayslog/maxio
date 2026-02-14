@@ -1,9 +1,12 @@
 use std::{sync::Arc, time::Duration};
 
-use futures::{stream::FuturesUnordered, StreamExt};
+use futures::{StreamExt, stream::FuturesUnordered};
 use tokio::time::{sleep, timeout};
 
-use super::{lock_args::LockArgs, locker::{LockResult, NetLocker}};
+use super::{
+    lock_args::LockArgs,
+    locker::{LockResult, NetLocker},
+};
 
 pub const ACQUIRE_TIMEOUT: Duration = Duration::from_secs(1);
 pub const REFRESH_CALL_TIMEOUT: Duration = Duration::from_secs(5);
@@ -157,7 +160,8 @@ impl DsyncClient {
             let locker = Arc::clone(locker);
             let call_args = args.clone();
             pending.push(async move {
-                let outcome = match timeout(REFRESH_CALL_TIMEOUT, locker.refresh(&call_args)).await {
+                let outcome = match timeout(REFRESH_CALL_TIMEOUT, locker.refresh(&call_args)).await
+                {
                     Ok(Ok(result)) => result,
                     Ok(Err(_)) => LockResult::Failed,
                     Err(_) => LockResult::Failed,

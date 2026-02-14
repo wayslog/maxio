@@ -1047,12 +1047,18 @@ name = "maxio-admin"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "chrono",
+ "maxio-auth",
  "maxio-common",
+ "maxio-distributed",
+ "maxio-iam",
+ "maxio-storage",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -1105,12 +1111,16 @@ dependencies = [
  "async-trait",
  "chrono",
  "futures",
+ "hex",
+ "maxio-auth",
  "maxio-common",
  "maxio-storage",
+ "quick-xml",
  "reqwest",
  "rmp-serde",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror 2.0.18",
  "tokio",
  "tokio-tungstenite",

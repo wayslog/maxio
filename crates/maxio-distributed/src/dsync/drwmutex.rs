@@ -143,7 +143,11 @@ impl DRWMutex {
         let (args_lock, granted_lock, refresh_lock) = if read_lock {
             (&self.read_args, &self.read_locks, &self.read_refresh_task)
         } else {
-            (&self.write_args, &self.write_locks, &self.write_refresh_task)
+            (
+                &self.write_args,
+                &self.write_locks,
+                &self.write_refresh_task,
+            )
         };
 
         self.abort_refresh_task(refresh_lock)?;
@@ -152,7 +156,9 @@ impl DRWMutex {
         let granted = self.take_granted(granted_lock)?;
 
         if let Some(args) = args {
-            self.client.unlock_with_retry(&args, granted, read_lock).await;
+            self.client
+                .unlock_with_retry(&args, granted, read_lock)
+                .await;
         }
 
         Ok(())
@@ -216,7 +222,10 @@ impl DRWMutex {
         })
     }
 
-    fn abort_refresh_task(&self, task_lock: &RwLock<Option<tokio::task::JoinHandle<()>>>) -> Result<()> {
+    fn abort_refresh_task(
+        &self,
+        task_lock: &RwLock<Option<tokio::task::JoinHandle<()>>>,
+    ) -> Result<()> {
         let mut guard = task_lock
             .write()
             .map_err(|_| MaxioError::InternalError("dsync refresh lock poisoned".to_string()))?;

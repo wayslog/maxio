@@ -87,9 +87,9 @@ impl MrfQueue {
                     "MRF queue is full; operation dropped".to_string(),
                 ))
             }
-            Err(mpsc::error::TrySendError::Closed(_)) => Err(MaxioError::InternalError(
-                "MRF queue is closed".to_string(),
-            )),
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                Err(MaxioError::InternalError("MRF queue is closed".to_string()))
+            }
         }
     }
 

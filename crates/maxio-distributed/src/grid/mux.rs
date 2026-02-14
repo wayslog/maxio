@@ -31,7 +31,13 @@ impl MuxClient {
         }
     }
 
-    pub async fn request(&self, mux_id: MuxId, handler: u8, payload: Vec<u8>, flags: Flags) -> Result<Message> {
+    pub async fn request(
+        &self,
+        mux_id: MuxId,
+        handler: u8,
+        payload: Vec<u8>,
+        flags: Flags,
+    ) -> Result<Message> {
         let seq = self
             .next_seq
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -60,7 +66,9 @@ impl MuxClient {
     pub async fn handle_response(&self, message: Message) -> Result<()> {
         let tx = self.pending.write().await.remove(&message.seq);
         match tx {
-            Some(waiter) => waiter.send(message).map_err(|_| GridError::ConnectionClosed),
+            Some(waiter) => waiter
+                .send(message)
+                .map_err(|_| GridError::ConnectionClosed),
             None => Err(GridError::UnexpectedResponse { seq: message.seq }),
         }
     }
@@ -118,7 +126,10 @@ impl MuxServer {
             HandlerKind::Stream(stream_handler) => {
                 let (out_tx, mut out_rx) = mpsc::channel::<Vec<u8>>(64);
                 let (in_tx, in_rx) = mpsc::channel::<Vec<u8>>(64);
-                self.stream_incoming.write().await.insert(message.mux_id, in_tx);
+                self.stream_incoming
+                    .write()
+                    .await
+                    .insert(message.mux_id, in_tx);
 
                 let stream = Stream::new(message.mux_id, out_tx, in_rx);
                 let writer = self.tx.clone();
@@ -128,14 +139,22 @@ impl MuxServer {
 
                 tokio::spawn(async move {
                     while let Some(chunk) = out_rx.recv().await {
-                        let frame = Message::new(mux_id, seq, handler_id, Op::Response, Flags::NONE, chunk);
+                        let frame =
+                            Message::new(mux_id, seq, handler_id, Op::Response, Flags::NONE, chunk);
                         if writer.send(frame).await.is_err() {
                             break;
                         }
                     }
 
                     let _ = writer
-                        .send(Message::new(mux_id, seq, handler_id, Op::Response, Flags::EOF, Vec::new()))
+                        .send(Message::new(
+                            mux_id,
+                            seq,
+                            handler_id,
+                            Op::Response,
+                            Flags::EOF,
+                            Vec::new(),
+                        ))
                         .await;
                 });
 
@@ -145,13 +164,20 @@ impl MuxServer {
     }
 
     pub async fn handle_stream_chunk(&self, message: Message) -> Result<()> {
-        let sender = self.stream_incoming.read().await.get(&message.mux_id).cloned();
+        let sender = self
+            .stream_incoming
+            .read()
+            .await
+            .get(&message.mux_id)
+            .cloned();
         match sender {
             Some(tx) => tx
                 .send(message.payload)
                 .await
                 .map_err(|_| GridError::StreamClosed(message.mux_id)),
-            None => Err(GridError::UnknownMux { mux_id: message.mux_id }),
+            None => Err(GridError::UnknownMux {
+                mux_id: message.mux_id,
+            }),
         }
     }
 

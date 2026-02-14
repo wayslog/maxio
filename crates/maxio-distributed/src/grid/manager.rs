@@ -29,7 +29,10 @@ impl Manager {
             return Ok(existing);
         }
 
-        let connection = Arc::new(Connection::new(node_addr.to_string(), self.handlers.clone()));
+        let connection = Arc::new(Connection::new(
+            node_addr.to_string(),
+            self.handlers.clone(),
+        ));
         connection.start().await?;
 
         self.connections

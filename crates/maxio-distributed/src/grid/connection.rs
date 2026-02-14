@@ -87,8 +87,16 @@ impl Connection {
         Ok(())
     }
 
-    pub async fn request(&self, mux_id: MuxId, handler: u8, payload: Vec<u8>, flags: Flags) -> Result<Message> {
-        self.mux_client.request(mux_id, handler, payload, flags).await
+    pub async fn request(
+        &self,
+        mux_id: MuxId,
+        handler: u8,
+        payload: Vec<u8>,
+        flags: Flags,
+    ) -> Result<Message> {
+        self.mux_client
+            .request(mux_id, handler, payload, flags)
+            .await
     }
 
     pub async fn send(&self, message: Message) -> Result<()> {
@@ -115,9 +123,11 @@ impl Connection {
                             mux_server.close_stream(message.mux_id).await;
                         }
                         if let Err(err) = mux_client.handle_response(message.clone()).await {
-                            let _ = mux_server.handle_stream_chunk(message).await.map_err(|stream_err| {
-                                tracing::debug!(?err, ?stream_err, "response dispatch failed");
-                            });
+                            let _ = mux_server.handle_stream_chunk(message).await.map_err(
+                                |stream_err| {
+                                    tracing::debug!(?err, ?stream_err, "response dispatch failed");
+                                },
+                            );
                         }
                     }
                     Op::Request => {
@@ -126,7 +136,14 @@ impl Connection {
                         }
                     }
                     Op::Ping => {
-                        let pong = Message::new(message.mux_id, message.seq, message.handler, Op::Pong, Flags::NONE, Vec::new());
+                        let pong = Message::new(
+                            message.mux_id,
+                            message.seq,
+                            message.handler,
+                            Op::Pong,
+                            Flags::NONE,
+                            Vec::new(),
+                        );
                         let _ = outgoing_tx
                             .send(pong)
                             .await
@@ -150,13 +167,15 @@ impl Connection {
                     backoff = Duration::from_secs(1);
                     let result = self.session(stream, outgoing).await;
                     if let Err(err) = result {
-                        self.set_state(ConnectionState::Error(err.to_string())).await;
+                        self.set_state(ConnectionState::Error(err.to_string()))
+                            .await;
                         self.mux_client.fail_all(&err).await;
                     }
                     self.set_state(ConnectionState::Unconnected).await;
                 }
                 Err(err) => {
-                    self.set_state(ConnectionState::Error(err.to_string())).await;
+                    self.set_state(ConnectionState::Error(err.to_string()))
+                        .await;
                     self.mux_client.fail_all(&GridError::WebSocket(err)).await;
                 }
             }

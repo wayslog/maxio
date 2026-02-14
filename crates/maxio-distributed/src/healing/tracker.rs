@@ -37,14 +37,14 @@ impl HealingTracker {
     pub async fn load_or_new(state_path: impl AsRef<Path>) -> Result<Self> {
         let state_path = state_path.as_ref().to_path_buf();
         let snapshot = match tokio::fs::read(&state_path).await {
-            Ok(bytes) => Some(serde_json::from_slice::<HealingTrackerSnapshot>(&bytes).map_err(
-                |err| {
+            Ok(bytes) => Some(
+                serde_json::from_slice::<HealingTrackerSnapshot>(&bytes).map_err(|err| {
                     MaxioError::InternalError(format!(
                         "failed to parse healing tracker state {}: {err}",
                         state_path.display()
                     ))
-                },
-            )?),
+                })?,
+            ),
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
             Err(err) => {
                 return Err(MaxioError::Io(err));

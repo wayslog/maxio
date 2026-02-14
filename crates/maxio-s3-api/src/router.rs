@@ -49,6 +49,8 @@ async fn get_bucket_dispatch(
             Path(bucket),
         )
         .await
+    } else if query.contains_key("replication") {
+        handlers::replication::get_bucket_replication(State(store), Path(bucket)).await
     } else if query.get("list-type").is_some_and(|v| v == "2") {
         handlers::object::list_objects_v2(State(store), Path(bucket), Query(query)).await
     } else {
@@ -82,6 +84,8 @@ async fn put_bucket_dispatch(
             body,
         )
         .await
+    } else if query.contains_key("replication") {
+        handlers::replication::put_bucket_replication(State(store), Path(bucket), body).await
     } else {
         handlers::bucket::make_bucket(State(store), Path(bucket)).await
     }
@@ -100,6 +104,8 @@ async fn delete_bucket_dispatch(
             Path(bucket),
         )
         .await
+    } else if query.contains_key("replication") {
+        handlers::replication::delete_bucket_replication(State(store), Path(bucket)).await
     } else {
         handlers::bucket::delete_bucket(State(store), Path(bucket)).await
     }
@@ -113,7 +119,9 @@ async fn put_object_dispatch(
     headers: axum::http::HeaderMap,
     body: axum::body::Bytes,
 ) -> Result<Response, S3Error> {
-    if query.contains_key("uploadId") && query.contains_key("partNumber") {
+    if query.contains_key("tagging") {
+        handlers::tagging::put_object_tagging(State(store), Path((bucket, key)), body).await
+    } else if query.contains_key("uploadId") && query.contains_key("partNumber") {
         handlers::multipart::upload_part(State(store), Path((bucket, key)), Query(query), body)
             .await
     } else {
@@ -162,7 +170,9 @@ async fn get_object_dispatch(
     Query(query): Query<HashMap<String, String>>,
     headers: axum::http::HeaderMap,
 ) -> Result<Response, S3Error> {
-    if query.contains_key("uploadId") {
+    if query.contains_key("tagging") {
+        handlers::tagging::get_object_tagging(State(store), Path((bucket, key))).await
+    } else if query.contains_key("uploadId") {
         handlers::multipart::list_parts(State(store), Path((bucket, key)), Query(query)).await
     } else {
         handlers::object::get_object(State(store), Path((bucket, key)), Query(query), headers).await
@@ -175,7 +185,9 @@ async fn delete_object_dispatch(
     Path((bucket, key)): Path<(String, String)>,
     Query(query): Query<HashMap<String, String>>,
 ) -> Result<Response, S3Error> {
-    if query.contains_key("uploadId") {
+    if query.contains_key("tagging") {
+        handlers::tagging::delete_object_tagging(State(store), Path((bucket, key))).await
+    } else if query.contains_key("uploadId") {
         handlers::multipart::abort_multipart_upload(State(store), Path((bucket, key)), Query(query))
             .await
     } else {

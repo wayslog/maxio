@@ -4,4 +4,6 @@ pub mod health;
 pub mod lifecycle;
 pub mod multipart;
 pub mod object;
+pub mod replication;
+pub mod tagging;
 pub mod versioning;

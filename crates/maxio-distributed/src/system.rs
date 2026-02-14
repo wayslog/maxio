@@ -56,7 +56,11 @@ impl DistributedSys {
         selected.id == this_id || selected.endpoint == self.this_node
     }
 
-    fn select_node<'a>(&self, bucket: &str, nodes: &'a [crate::types::NodeInfo]) -> &'a crate::types::NodeInfo {
+    fn select_node<'a>(
+        &self,
+        bucket: &str,
+        nodes: &'a [crate::types::NodeInfo],
+    ) -> &'a crate::types::NodeInfo {
         let mut hasher = DefaultHasher::new();
         bucket.hash(&mut hasher);
         let hash_value = hasher.finish() as usize;

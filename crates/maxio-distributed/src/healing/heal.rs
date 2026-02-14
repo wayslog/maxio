@@ -82,7 +82,10 @@ impl HealEngine {
             )));
         }
 
-        Ok(Self { disk_paths, erasure })
+        Ok(Self {
+            disk_paths,
+            erasure,
+        })
     }
 
     pub async fn heal_object(&self, bucket: &str, object: &str) -> Result<HealResult> {
@@ -104,7 +107,8 @@ impl HealEngine {
         let mut repair_targets = HashSet::new();
         for observation in &observations {
             match (&observation.meta_signature, observation.state) {
-                (Some(signature), HealShardState::Healthy) if signature == &canonical_signature => {}
+                (Some(signature), HealShardState::Healthy) if signature == &canonical_signature => {
+                }
                 _ => {
                     repair_targets.insert(observation.disk_index);
                     items[observation.disk_index].before = match observation.state {
@@ -382,7 +386,13 @@ impl HealEngine {
             .join(META_FILE_NAME)
     }
 
-    fn block_part_path(&self, disk_index: usize, bucket: &str, object: &str, block_index: usize) -> PathBuf {
+    fn block_part_path(
+        &self,
+        disk_index: usize,
+        bucket: &str,
+        object: &str,
+        block_index: usize,
+    ) -> PathBuf {
         self.disk_paths[disk_index]
             .join(bucket)
             .join(object)
