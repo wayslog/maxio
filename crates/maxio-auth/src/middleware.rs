@@ -16,6 +16,7 @@ use crate::{
     credentials::CredentialProvider,
     parser::parse_auth_header,
     presigned::{is_presigned_v4, parse_presigned_v4, verify_presigned_v4},
+    signature_v2::{is_signature_v2, parse_v2_auth, verify_signature_v2},
     signature_v4::verify_signature,
 };
 
@@ -124,6 +125,45 @@ where
                 }
                 return inner.call(req).await;
             };
+
+            if is_signature_v2(auth_header) {
+                let parsed = match parse_v2_auth(auth_header) {
+                    Some(p) => p,
+                    None => {
+                        return Ok(s3_error_response(MaxioError::AccessDenied(
+                            "invalid V2 authorization header".to_string(),
+                        )));
+                    }
+                };
+
+                let Some(credentials) = provider.lookup(&parsed.access_key) else {
+                    return Ok(s3_error_response(MaxioError::AccessDenied(
+                        "access key not found".to_string(),
+                    )));
+                };
+
+                let verified = verify_signature_v2(
+                    &credentials.secret_key,
+                    req.method().as_str(),
+                    req.uri().path(),
+                    req.headers(),
+                    &parsed,
+                );
+
+                if !verified {
+                    return Ok(s3_error_response(MaxioError::SignatureDoesNotMatch));
+                }
+
+                let (action, resource) =
+                    derive_action_resource(req.method().as_str(), req.uri().path());
+                if !provider.is_allowed(&parsed.access_key, &action, &resource) {
+                    return Ok(s3_error_response(MaxioError::AccessDenied(
+                        "iam policy denied this operation".to_string(),
+                    )));
+                }
+
+                return inner.call(req).await;
+            }
 
             let parsed = match parse_auth_header(auth_header) {
                 Ok(parsed) => parsed,
