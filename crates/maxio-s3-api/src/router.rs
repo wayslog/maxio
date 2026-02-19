@@ -330,6 +330,7 @@ pub fn s3_router(
 ) -> Router {
     let app: Router<Arc<dyn ObjectLayer>> = Router::<Arc<dyn ObjectLayer>>::new()
         .route("/minio/admin/v3/info", get(handlers::admin::server_info))
+        .route("/minio/sts", post(handlers::sts::sts_handler))
         .route("/minio/admin/v3/add-user", post(handlers::admin::add_user))
         .route(
             "/minio/admin/v3/remove-user",

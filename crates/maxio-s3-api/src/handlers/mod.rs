@@ -16,6 +16,7 @@ pub mod ownership;
 pub mod public_access;
 pub mod replication;
 pub mod request_payment;
+pub mod sts;
 pub mod tagging;
 pub mod versioning;
 pub mod website;
