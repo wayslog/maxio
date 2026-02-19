@@ -345,3 +345,83 @@ pub async fn list_multipart_uploads(
     };
     xml_response(StatusCode::OK, &payload)
 }
+
+#[derive(Debug, Serialize)]
+#[serde(rename = "CopyPartResult")]
+struct CopyPartResultXml {
+    #[serde(rename = "ETag")]
+    etag: String,
+    #[serde(rename = "LastModified")]
+    last_modified: String,
+}
+
+pub async fn upload_part_copy(
+    State(store): State<Arc<dyn ObjectLayer>>,
+    Path((bucket, key)): Path<(String, String)>,
+    Query(query): Query<HashMap<String, String>>,
+    headers: HeaderMap,
+) -> S3Result {
+    let upload_id = query.get("uploadId").cloned().unwrap_or_default();
+    let part_number: u16 = query
+        .get("partNumber")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+
+    if part_number == 0 {
+        return Err(S3Error::from(MaxioError::InvalidArgument(
+            "partNumber must be a positive integer".to_string(),
+        )));
+    }
+
+    let (source_bucket, source_key) = super::object::parse_copy_source(&headers)?;
+
+    let source_range = headers
+        .get("x-amz-copy-source-range")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.to_string());
+
+    let range = source_range.as_deref().and_then(|r| {
+        let r = r.strip_prefix("bytes=")?;
+        let (start, end) = r.split_once('-')?;
+        let start: u64 = start.parse().ok()?;
+        let end: u64 = end.parse().ok()?;
+        Some((start, end))
+    });
+
+    let (_source_info, source_bytes) = store
+        .get_object(&source_bucket, &source_key, None)
+        .await
+        .map_err(S3Error::from)?;
+
+    let part_data = if let Some((start, end)) = range {
+        let start = start as usize;
+        let end = (end + 1).min(source_bytes.len() as u64) as usize;
+        if start >= source_bytes.len() || start >= end {
+            return Err(S3Error::from(MaxioError::InvalidRange));
+        }
+        source_bytes.slice(start..end)
+    } else {
+        source_bytes
+    };
+
+    let etag = store
+        .upload_part(
+            &bucket,
+            &key,
+            &upload_id,
+            part_number as i32,
+            part_data,
+        )
+        .await
+        .map_err(S3Error::from)?;
+
+    let etag_quoted = format!("\"{}\"", etag);
+    let last_modified = Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
+
+    let payload = CopyPartResultXml {
+        etag: etag_quoted,
+        last_modified,
+    };
+
+    xml_response(StatusCode::OK, &payload)
+}

@@ -509,7 +509,7 @@ fn parse_put_encryption(
     Ok(None)
 }
 
-fn parse_copy_source(headers: &HeaderMap) -> std::result::Result<(String, String), MaxioError> {
+pub(crate) fn parse_copy_source(headers: &HeaderMap) -> std::result::Result<(String, String), MaxioError> {
     let source = headers
         .get(COPY_SOURCE_HEADER)
         .and_then(|value| value.to_str().ok())

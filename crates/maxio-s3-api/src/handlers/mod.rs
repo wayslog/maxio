@@ -3,6 +3,7 @@ pub mod admin;
 pub mod bucket;
 pub mod bucket_encryption;
 pub mod bucket_policy;
+pub mod bucket_tagging;
 pub mod cors;
 pub mod delete;
 pub mod health;

@@ -74,6 +74,10 @@ async fn get_bucket_dispatch(
         handlers::request_payment::get_bucket_request_payment(State(store), Path(bucket)).await
     } else if query.contains_key("ownershipControls") {
         handlers::ownership::get_bucket_ownership_controls(State(store), Path(bucket)).await
+    } else if query.contains_key("tagging") {
+        handlers::bucket_tagging::get_bucket_tagging(State(store), Path(bucket)).await
+    } else if query.contains_key("accelerate") {
+        handlers::bucket_tagging::get_bucket_accelerate(State(store), Path(bucket)).await
     } else if query.get("list-type").is_some_and(|v| v == "2") {
         handlers::object::list_objects_v2(State(store), Path(bucket), Query(query)).await
     } else {
@@ -131,6 +135,8 @@ async fn put_bucket_dispatch(
             .await
     } else if query.contains_key("ownershipControls") {
         handlers::ownership::put_bucket_ownership_controls(State(store), Path(bucket), body).await
+    } else if query.contains_key("tagging") {
+        handlers::bucket_tagging::put_bucket_tagging(State(store), Path(bucket), body).await
     } else {
         handlers::bucket::make_bucket(State(store), Path(bucket)).await
     }
@@ -163,6 +169,8 @@ async fn delete_bucket_dispatch(
         handlers::public_access::delete_public_access_block(State(store), Path(bucket)).await
     } else if query.contains_key("ownershipControls") {
         handlers::ownership::delete_bucket_ownership_controls(State(store), Path(bucket)).await
+    } else if query.contains_key("tagging") {
+        handlers::bucket_tagging::delete_bucket_tagging(State(store), Path(bucket)).await
     } else {
         handlers::bucket::delete_bucket(State(store), Path(bucket)).await
     }
@@ -184,6 +192,17 @@ async fn put_object_dispatch(
         handlers::object_lock::put_object_retention(State(store), Path((bucket, key)), body).await
     } else if query.contains_key("tagging") {
         handlers::tagging::put_object_tagging(State(store), Path((bucket, key)), body).await
+    } else if query.contains_key("uploadId")
+        && query.contains_key("partNumber")
+        && headers.contains_key("x-amz-copy-source")
+    {
+        handlers::multipart::upload_part_copy(
+            State(store),
+            Path((bucket, key)),
+            Query(query),
+            headers,
+        )
+        .await
     } else if query.contains_key("uploadId") && query.contains_key("partNumber") {
         handlers::multipart::upload_part(State(store), Path((bucket, key)), Query(query), body)
             .await
