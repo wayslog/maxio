@@ -13,7 +13,10 @@ use tower::{Layer, Service};
 use tracing::debug;
 
 use crate::{
-    credentials::CredentialProvider, parser::parse_auth_header, signature_v4::verify_signature,
+    credentials::CredentialProvider,
+    parser::parse_auth_header,
+    presigned::{is_presigned_v4, parse_presigned_v4, verify_presigned_v4},
+    signature_v4::verify_signature,
 };
 
 #[derive(Clone)]
@@ -69,6 +72,49 @@ where
                 .get(AUTHORIZATION)
                 .and_then(|v| v.to_str().ok())
                 .map(str::trim);
+
+            let query_string = req.uri().query().unwrap_or("");
+
+            // Check for presigned V4 URL (query parameter auth)
+            if auth_header.is_none() && is_presigned_v4(query_string) {
+                let params = match parse_presigned_v4(query_string) {
+                    Some(p) => p,
+                    None => {
+                        return Ok(s3_error_response(MaxioError::AccessDenied(
+                            "invalid presigned URL parameters".to_string(),
+                        )));
+                    }
+                };
+
+                let Some(credentials) = provider.lookup(&params.access_key) else {
+                    return Ok(s3_error_response(MaxioError::AccessDenied(
+                        "access key not found".to_string(),
+                    )));
+                };
+
+                let verified = verify_presigned_v4(
+                    &credentials.secret_key,
+                    req.method().as_str(),
+                    req.uri().path(),
+                    query_string,
+                    req.headers(),
+                    &params,
+                );
+
+                if !verified {
+                    return Ok(s3_error_response(MaxioError::SignatureDoesNotMatch));
+                }
+
+                let (action, resource) =
+                    derive_action_resource(req.method().as_str(), req.uri().path());
+                if !provider.is_allowed(&params.access_key, &action, &resource) {
+                    return Ok(s3_error_response(MaxioError::AccessDenied(
+                        "iam policy denied this operation".to_string(),
+                    )));
+                }
+
+                return inner.call(req).await;
+            }
 
             let Some(auth_header) = auth_header else {
                 if req.uri().path().starts_with("/minio/admin/") {
