@@ -169,13 +169,17 @@ impl XlStorage {
             .await
             .map_err(|err| map_bucket_io_error(bucket, err))?;
 
-        if entries.next_entry().await?.is_some() {
-            return Err(MaxioError::InvalidArgument(format!(
-                "bucket is not empty: {bucket}"
-            )));
+        while let Some(entry) = entries.next_entry().await? {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if !name_str.starts_with('.') {
+                return Err(MaxioError::InvalidArgument(format!(
+                    "bucket is not empty: {bucket}"
+                )));
+            }
         }
 
-        fs::remove_dir(bucket_path)
+        fs::remove_dir_all(&bucket_path)
             .await
             .map_err(|err| map_bucket_io_error(bucket, err))?;
         Ok(())
