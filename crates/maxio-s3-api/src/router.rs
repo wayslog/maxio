@@ -346,10 +346,18 @@ pub fn s3_router(
             "/minio/admin/v3/set-user-or-group-policy",
             put(handlers::admin::set_user_or_group_policy),
         )
-        .route("/minio/health/live", get(handlers::health::health_live))
+        .route("/minio/health/live", get(handlers::health::health_live).head(handlers::health::health_live))
         .route(
             "/minio/health/cluster",
-            get(handlers::health::health_cluster),
+            get(handlers::health::health_cluster).head(handlers::health::health_cluster),
+        )
+        .route(
+            "/minio/health/ready",
+            get(handlers::health::health_ready).head(handlers::health::health_ready),
+        )
+        .route(
+            "/minio/health/cluster/read",
+            get(handlers::health::health_cluster_read).head(handlers::health::health_cluster_read),
         )
         .route("/", get(handlers::bucket::list_buckets))
         .route(
