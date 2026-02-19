@@ -76,6 +76,8 @@ pub trait ObjectLayer: Send + Sync {
     async fn delete_bucket(&self, bucket: &str) -> Result<()>;
     async fn get_bucket_versioning(&self, bucket: &str) -> Result<VersioningState>;
     async fn set_bucket_versioning(&self, bucket: &str, state: VersioningState) -> Result<()>;
+    async fn get_bucket_acl(&self, bucket: &str) -> Result<Option<String>>;
+    async fn put_bucket_acl(&self, bucket: &str, acl_json: &str) -> Result<()>;
     async fn put_object(
         &self,
         bucket: &str,
@@ -84,6 +86,15 @@ pub trait ObjectLayer: Send + Sync {
         content_type: Option<&str>,
         metadata: HashMap<String, String>,
         encryption: Option<PutEncryptionOptions>,
+    ) -> Result<ObjectInfo>;
+    async fn copy_object(
+        &self,
+        source_bucket: &str,
+        source_key: &str,
+        destination_bucket: &str,
+        destination_key: &str,
+        content_type: Option<&str>,
+        metadata: HashMap<String, String>,
     ) -> Result<ObjectInfo>;
     async fn get_object(
         &self,
@@ -104,6 +115,8 @@ pub trait ObjectLayer: Send + Sync {
         key: &str,
         encryption: Option<GetEncryptionOptions>,
     ) -> Result<ObjectInfo>;
+    async fn get_object_acl(&self, bucket: &str, key: &str) -> Result<Option<String>>;
+    async fn put_object_acl(&self, bucket: &str, key: &str, acl_json: &str) -> Result<()>;
     async fn delete_object(&self, bucket: &str, key: &str) -> Result<()>;
     async fn delete_object_version(&self, bucket: &str, key: &str, version_id: &str) -> Result<()>;
     async fn list_objects(

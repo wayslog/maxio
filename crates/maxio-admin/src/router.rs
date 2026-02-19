@@ -1,15 +1,14 @@
 use std::sync::Arc;
 
-use axum::{middleware, routing::get, Router};
+use axum::{Router, middleware, routing::get};
 use maxio_common::error::Result;
 use maxio_distributed::DistributedSys;
 use maxio_storage::traits::ObjectLayer;
 
 use crate::{
-    handlers,
+    AdminSys, handlers,
     metrics::{ApiMetrics, MetricsRegistry, StorageMetrics, SystemMetrics},
     middleware::admin_auth,
-    AdminSys,
 };
 
 pub struct AdminState {

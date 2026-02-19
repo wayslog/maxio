@@ -157,9 +157,7 @@ impl AdminSys {
             .map_err(|_| MaxioError::InternalError("admin policies lock poisoned".to_string()))
     }
 
-    fn policies_write(
-        &self,
-    ) -> Result<std::sync::RwLockWriteGuard<'_, HashMap<String, Policy>>> {
+    fn policies_write(&self) -> Result<std::sync::RwLockWriteGuard<'_, HashMap<String, Policy>>> {
         self.policies
             .write()
             .map_err(|_| MaxioError::InternalError("admin policies lock poisoned".to_string()))

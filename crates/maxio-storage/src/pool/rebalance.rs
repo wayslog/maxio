@@ -110,14 +110,18 @@ pub async fn start_rebalance(manager: &PoolManager) -> Result<RebalanceStatus> {
 
             {
                 let source = state.pools.get_mut(&source_id).ok_or_else(|| {
-                    MaxioError::InternalError(format!("missing source pool during rebalance: {source_id}"))
+                    MaxioError::InternalError(format!(
+                        "missing source pool during rebalance: {source_id}"
+                    ))
                 })?;
                 source.used_space = source.used_space.saturating_sub(moved);
             }
 
             {
                 let target = state.pools.get_mut(target_id).ok_or_else(|| {
-                    MaxioError::InternalError(format!("missing target pool during rebalance: {target_id}"))
+                    MaxioError::InternalError(format!(
+                        "missing target pool during rebalance: {target_id}"
+                    ))
                 })?;
                 target.used_space = target.used_space.saturating_add(moved);
             }

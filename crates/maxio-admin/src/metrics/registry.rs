@@ -9,7 +9,9 @@ use std::{
 
 use maxio_common::error::{MaxioError, Result};
 
-use crate::metrics::types::{CollectedMetric, MetricDescriptor, MetricSample, MetricType, MetricValue};
+use crate::metrics::types::{
+    CollectedMetric, MetricDescriptor, MetricSample, MetricType, MetricValue,
+};
 
 type LabelValues = Vec<String>;
 
@@ -187,7 +189,10 @@ impl CounterMetric {
                 name: name.to_string(),
                 help: help.to_string(),
                 metric_type: MetricType::Counter,
-                variable_labels: variable_labels.iter().map(|label| (*label).to_string()).collect(),
+                variable_labels: variable_labels
+                    .iter()
+                    .map(|label| (*label).to_string())
+                    .collect(),
             },
             series: RwLock::new(HashMap::new()),
         }
@@ -253,7 +258,10 @@ impl GaugeMetric {
                 name: name.to_string(),
                 help: help.to_string(),
                 metric_type: MetricType::Gauge,
-                variable_labels: variable_labels.iter().map(|label| (*label).to_string()).collect(),
+                variable_labels: variable_labels
+                    .iter()
+                    .map(|label| (*label).to_string())
+                    .collect(),
             },
             series: RwLock::new(HashMap::new()),
         }
@@ -334,7 +342,10 @@ impl HistogramMetric {
                 name: name.to_string(),
                 help: help.to_string(),
                 metric_type: MetricType::Histogram,
-                variable_labels: variable_labels.iter().map(|label| (*label).to_string()).collect(),
+                variable_labels: variable_labels
+                    .iter()
+                    .map(|label| (*label).to_string())
+                    .collect(),
             },
             buckets: sorted_buckets,
             series: RwLock::new(HashMap::new()),

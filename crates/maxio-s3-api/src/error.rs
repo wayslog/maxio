@@ -9,9 +9,15 @@ impl IntoResponse for S3Error {
         let error_code = self.0.s3_error_code();
         let message = self.0.to_string();
         let status = match self.0 {
-            MaxioError::BucketNotFound(_) | MaxioError::ObjectNotFound { .. } => {
-                StatusCode::NOT_FOUND
-            }
+            MaxioError::BucketNotFound(_)
+            | MaxioError::ObjectNotFound { .. }
+            | MaxioError::NoSuchBucketPolicy(_)
+            | MaxioError::NoSuchCORSConfiguration(_)
+            | MaxioError::NoSuchWebsiteConfiguration(_)
+            | MaxioError::NoSuchPublicAccessBlockConfiguration(_)
+            | MaxioError::OwnershipControlsNotFound(_) => StatusCode::NOT_FOUND,
+            MaxioError::ServerSideEncryptionConfigurationNotFound(_)
+            | MaxioError::ObjectLockConfigurationNotFound(_) => StatusCode::NOT_FOUND,
             MaxioError::BucketAlreadyExists(_) => StatusCode::CONFLICT,
             MaxioError::AccessDenied(_) | MaxioError::SignatureDoesNotMatch => {
                 StatusCode::FORBIDDEN

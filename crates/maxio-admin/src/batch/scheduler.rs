@@ -82,9 +82,9 @@ impl JobScheduler {
         }
 
         let mut jobs = self.jobs.write().await;
-        let job = jobs.get_mut(id).ok_or_else(|| {
-            MaxioError::InvalidArgument(format!("batch job not found: {id}"))
-        })?;
+        let job = jobs
+            .get_mut(id)
+            .ok_or_else(|| MaxioError::InvalidArgument(format!("batch job not found: {id}")))?;
         if job.status == JobStatus::Completed || job.status == JobStatus::Failed {
             return Ok(job.clone());
         }
@@ -94,13 +94,16 @@ impl JobScheduler {
         Ok(job.clone())
     }
 
-    async fn run_job(&self, id: String, job_type: JobType, expiration: Option<ExpirationJobConfig>) {
+    async fn run_job(
+        &self,
+        id: String,
+        job_type: JobType,
+        expiration: Option<ExpirationJobConfig>,
+    ) {
         self.update_status(&id, JobStatus::Running).await;
 
         let result = match job_type {
-            JobType::Expiration => {
-                self.run_expiration_job(&id, expiration).await
-            }
+            JobType::Expiration => self.run_expiration_job(&id, expiration).await,
             JobType::Replication | JobType::KeyRotation => Err(MaxioError::NotImplemented(
                 "batch job type is not implemented yet".to_string(),
             )),
@@ -138,7 +141,9 @@ impl JobScheduler {
         }
 
         for (index, key) in keys.into_iter().enumerate() {
-            self.object_layer.delete_object(&config.bucket, &key).await?;
+            self.object_layer
+                .delete_object(&config.bucket, &key)
+                .await?;
             let progress = (((index + 1) * 100) / total) as u8;
             self.update_progress(id, progress).await;
         }

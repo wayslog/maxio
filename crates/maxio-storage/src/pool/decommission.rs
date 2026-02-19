@@ -8,7 +8,10 @@ use crate::pool::types::{DecommissionStatus, PoolStatus};
 
 const MIGRATION_OBJECT_CHUNK_BYTES: u64 = 64 * 1024 * 1024;
 
-pub async fn start_decommission(manager: &PoolManager, pool_id: &str) -> Result<DecommissionStatus> {
+pub async fn start_decommission(
+    manager: &PoolManager,
+    pool_id: &str,
+) -> Result<DecommissionStatus> {
     let mut state = manager.state.write().await;
 
     let source = state

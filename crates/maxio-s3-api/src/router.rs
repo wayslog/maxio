@@ -27,7 +27,9 @@ async fn get_bucket_dispatch(
     Path(bucket): Path<String>,
     Query(query): Query<HashMap<String, String>>,
 ) -> Result<Response, S3Error> {
-    if query.contains_key("location") {
+    if query.contains_key("acl") {
+        handlers::acl::get_bucket_acl(State(store), Path(bucket)).await
+    } else if query.contains_key("location") {
         handlers::bucket::get_bucket_location(State(store), Path(bucket)).await
     } else if query.contains_key("versioning") {
         handlers::versioning::get_bucket_versioning(State(store), Path(bucket)).await
@@ -49,8 +51,28 @@ async fn get_bucket_dispatch(
             Path(bucket),
         )
         .await
+    } else if query.contains_key("logging") {
+        handlers::logging::get_bucket_logging(State(store), Path(bucket)).await
     } else if query.contains_key("replication") {
         handlers::replication::get_bucket_replication(State(store), Path(bucket)).await
+    } else if query.contains_key("cors") {
+        handlers::cors::get_bucket_cors(State(store), Path(bucket)).await
+    } else if query.contains_key("website") {
+        handlers::website::get_bucket_website(State(store), Path(bucket)).await
+    } else if query.contains_key("policy") {
+        handlers::bucket_policy::get_bucket_policy(State(store), Path(bucket)).await
+    } else if query.contains_key("policyStatus") {
+        handlers::bucket_policy::get_bucket_policy_status(State(store), Path(bucket)).await
+    } else if query.contains_key("encryption") {
+        handlers::bucket_encryption::get_bucket_encryption(State(store), Path(bucket)).await
+    } else if query.contains_key("object-lock") {
+        handlers::object_lock::get_object_lock_configuration(State(store), Path(bucket)).await
+    } else if query.contains_key("publicAccessBlock") {
+        handlers::public_access::get_public_access_block(State(store), Path(bucket)).await
+    } else if query.contains_key("requestPayment") {
+        handlers::request_payment::get_bucket_request_payment(State(store), Path(bucket)).await
+    } else if query.contains_key("ownershipControls") {
+        handlers::ownership::get_bucket_ownership_controls(State(store), Path(bucket)).await
     } else if query.get("list-type").is_some_and(|v| v == "2") {
         handlers::object::list_objects_v2(State(store), Path(bucket), Query(query)).await
     } else {
@@ -64,9 +86,12 @@ async fn put_bucket_dispatch(
     Extension(lifecycle): Extension<Arc<LifecycleSys>>,
     Path(bucket): Path<String>,
     Query(query): Query<HashMap<String, String>>,
+    headers: axum::http::HeaderMap,
     body: axum::body::Bytes,
 ) -> Result<Response, S3Error> {
-    if query.contains_key("versioning") {
+    if query.contains_key("acl") {
+        handlers::acl::put_bucket_acl(State(store), Path(bucket), headers, body).await
+    } else if query.contains_key("versioning") {
         handlers::versioning::put_bucket_versioning(State(store), Path(bucket), body).await
     } else if query.contains_key("notification") {
         handlers::bucket::put_bucket_notification_configuration(
@@ -84,8 +109,27 @@ async fn put_bucket_dispatch(
             body,
         )
         .await
+    } else if query.contains_key("logging") {
+        handlers::logging::put_bucket_logging(State(store), Path(bucket), body).await
     } else if query.contains_key("replication") {
         handlers::replication::put_bucket_replication(State(store), Path(bucket), body).await
+    } else if query.contains_key("cors") {
+        handlers::cors::put_bucket_cors(State(store), Path(bucket), body).await
+    } else if query.contains_key("website") {
+        handlers::website::put_bucket_website(State(store), Path(bucket), body).await
+    } else if query.contains_key("policy") {
+        handlers::bucket_policy::put_bucket_policy(State(store), Path(bucket), body).await
+    } else if query.contains_key("encryption") {
+        handlers::bucket_encryption::put_bucket_encryption(State(store), Path(bucket), body).await
+    } else if query.contains_key("object-lock") {
+        handlers::object_lock::put_object_lock_configuration(State(store), Path(bucket), body).await
+    } else if query.contains_key("publicAccessBlock") {
+        handlers::public_access::put_public_access_block(State(store), Path(bucket), body).await
+    } else if query.contains_key("requestPayment") {
+        handlers::request_payment::put_bucket_request_payment(State(store), Path(bucket), body)
+            .await
+    } else if query.contains_key("ownershipControls") {
+        handlers::ownership::put_bucket_ownership_controls(State(store), Path(bucket), body).await
     } else {
         handlers::bucket::make_bucket(State(store), Path(bucket)).await
     }
@@ -106,6 +150,18 @@ async fn delete_bucket_dispatch(
         .await
     } else if query.contains_key("replication") {
         handlers::replication::delete_bucket_replication(State(store), Path(bucket)).await
+    } else if query.contains_key("cors") {
+        handlers::cors::delete_bucket_cors(State(store), Path(bucket)).await
+    } else if query.contains_key("website") {
+        handlers::website::delete_bucket_website(State(store), Path(bucket)).await
+    } else if query.contains_key("policy") {
+        handlers::bucket_policy::delete_bucket_policy(State(store), Path(bucket)).await
+    } else if query.contains_key("encryption") {
+        handlers::bucket_encryption::delete_bucket_encryption(State(store), Path(bucket)).await
+    } else if query.contains_key("publicAccessBlock") {
+        handlers::public_access::delete_public_access_block(State(store), Path(bucket)).await
+    } else if query.contains_key("ownershipControls") {
+        handlers::ownership::delete_bucket_ownership_controls(State(store), Path(bucket)).await
     } else {
         handlers::bucket::delete_bucket(State(store), Path(bucket)).await
     }
@@ -119,11 +175,25 @@ async fn put_object_dispatch(
     headers: axum::http::HeaderMap,
     body: axum::body::Bytes,
 ) -> Result<Response, S3Error> {
-    if query.contains_key("tagging") {
+    if query.contains_key("acl") {
+        handlers::acl::put_object_acl(State(store), Path((bucket, key)), headers, body).await
+    } else if query.contains_key("legal-hold") {
+        handlers::object_lock::put_object_legal_hold(State(store), Path((bucket, key)), body).await
+    } else if query.contains_key("retention") {
+        handlers::object_lock::put_object_retention(State(store), Path((bucket, key)), body).await
+    } else if query.contains_key("tagging") {
         handlers::tagging::put_object_tagging(State(store), Path((bucket, key)), body).await
     } else if query.contains_key("uploadId") && query.contains_key("partNumber") {
         handlers::multipart::upload_part(State(store), Path((bucket, key)), Query(query), body)
             .await
+    } else if headers.contains_key("x-amz-copy-source") {
+        handlers::object::copy_object(
+            State(store),
+            Extension(notifications),
+            Path((bucket, key)),
+            headers,
+        )
+        .await
     } else {
         handlers::object::put_object(
             State(store),
@@ -133,6 +203,21 @@ async fn put_object_dispatch(
             body,
         )
         .await
+    }
+}
+
+async fn post_bucket_dispatch(
+    State(store): State<Arc<dyn ObjectLayer>>,
+    Path(bucket): Path<String>,
+    Query(query): Query<HashMap<String, String>>,
+    body: axum::body::Bytes,
+) -> Result<Response, S3Error> {
+    if query.contains_key("delete") {
+        handlers::delete::delete_objects(State(store), Path(bucket), body).await
+    } else {
+        Err(S3Error::from(MaxioError::NotImplemented(
+            "unsupported POST operation for bucket route".to_string(),
+        )))
     }
 }
 
@@ -170,8 +255,22 @@ async fn get_object_dispatch(
     Query(query): Query<HashMap<String, String>>,
     headers: axum::http::HeaderMap,
 ) -> Result<Response, S3Error> {
-    if query.contains_key("tagging") {
+    if query.contains_key("acl") {
+        handlers::acl::get_object_acl(State(store), Path((bucket, key))).await
+    } else if query.contains_key("legal-hold") {
+        handlers::object_lock::get_object_legal_hold(State(store), Path((bucket, key))).await
+    } else if query.contains_key("retention") {
+        handlers::object_lock::get_object_retention(State(store), Path((bucket, key))).await
+    } else if query.contains_key("tagging") {
         handlers::tagging::get_object_tagging(State(store), Path((bucket, key))).await
+    } else if query.contains_key("attributes") {
+        handlers::object::get_object_attributes(
+            State(store),
+            Path((bucket, key)),
+            Query(query),
+            headers,
+        )
+        .await
     } else if query.contains_key("uploadId") {
         handlers::multipart::list_parts(State(store), Path((bucket, key)), Query(query)).await
     } else {
@@ -236,6 +335,7 @@ pub fn s3_router(
         .route(
             "/{bucket}",
             put(put_bucket_dispatch)
+                .post(post_bucket_dispatch)
                 .head(handlers::bucket::head_bucket)
                 .delete(delete_bucket_dispatch)
                 .get(get_bucket_dispatch),

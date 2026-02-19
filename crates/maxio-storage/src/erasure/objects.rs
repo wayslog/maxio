@@ -287,6 +287,45 @@ impl ObjectLayer for ErasureObjectLayer {
         Ok(())
     }
 
+    async fn get_bucket_acl(&self, bucket: &str) -> Result<Option<String>> {
+        validate_bucket_name(bucket)?;
+        self.ensure_bucket_exists_for_quorum(bucket).await?;
+
+        let mut last_error: Option<MaxioError> = None;
+        for shard in self.storage.shards() {
+            match shard.storage.get_bucket_acl(bucket).await {
+                Ok(acl) => return Ok(acl),
+                Err(err) => last_error = Some(err),
+            }
+        }
+
+        Err(last_error.unwrap_or_else(|| {
+            MaxioError::InternalError("no readable disks available for get_bucket_acl".to_string())
+        }))
+    }
+
+    async fn put_bucket_acl(&self, bucket: &str, acl_json: &str) -> Result<()> {
+        validate_bucket_name(bucket)?;
+        self.ensure_bucket_exists_for_quorum(bucket).await?;
+
+        let mut changed = 0_usize;
+        for shard in self.storage.shards() {
+            if shard.storage.put_bucket_acl(bucket, acl_json).await.is_ok() {
+                changed += 1;
+            }
+        }
+
+        if changed < self.storage.config().data_shards {
+            return Err(MaxioError::InternalError(format!(
+                "failed to set bucket acl quorum: wrote {}, need {}",
+                changed,
+                self.storage.config().data_shards
+            )));
+        }
+
+        Ok(())
+    }
+
     async fn put_object(
         &self,
         bucket: &str,
@@ -395,6 +434,35 @@ impl ObjectLayer for ErasureObjectLayer {
             version_id: None,
             encryption: None,
         })
+    }
+
+    async fn copy_object(
+        &self,
+        source_bucket: &str,
+        source_key: &str,
+        destination_bucket: &str,
+        destination_key: &str,
+        content_type: Option<&str>,
+        metadata: HashMap<String, String>,
+    ) -> Result<ObjectInfo> {
+        validate_bucket_name(source_bucket)?;
+        validate_object_key(source_key)?;
+        validate_bucket_name(destination_bucket)?;
+        validate_object_key(destination_key)?;
+        self.ensure_bucket_exists_for_quorum(source_bucket).await?;
+        self.ensure_bucket_exists_for_quorum(destination_bucket)
+            .await?;
+
+        let (_, source_data) = self.get_object(source_bucket, source_key, None).await?;
+        self.put_object(
+            destination_bucket,
+            destination_key,
+            source_data,
+            content_type,
+            metadata,
+            None,
+        )
+        .await
     }
 
     async fn get_object(
@@ -530,6 +598,54 @@ impl ObjectLayer for ErasureObjectLayer {
 
         let meta = self.read_meta_from_any(bucket, key).await?;
         Ok(Self::meta_to_object_info(bucket, key, &meta))
+    }
+
+    async fn get_object_acl(&self, bucket: &str, key: &str) -> Result<Option<String>> {
+        validate_bucket_name(bucket)?;
+        validate_object_key(key)?;
+        self.ensure_bucket_exists_for_quorum(bucket).await?;
+        self.get_object_info(bucket, key, None).await?;
+
+        let mut last_error: Option<MaxioError> = None;
+        for shard in self.storage.shards() {
+            match shard.storage.get_object_acl(bucket, key).await {
+                Ok(acl) => return Ok(acl),
+                Err(err) => last_error = Some(err),
+            }
+        }
+
+        Err(last_error.unwrap_or_else(|| {
+            MaxioError::InternalError("no readable disks available for get_object_acl".to_string())
+        }))
+    }
+
+    async fn put_object_acl(&self, bucket: &str, key: &str, acl_json: &str) -> Result<()> {
+        validate_bucket_name(bucket)?;
+        validate_object_key(key)?;
+        self.ensure_bucket_exists_for_quorum(bucket).await?;
+        self.get_object_info(bucket, key, None).await?;
+
+        let mut changed = 0_usize;
+        for shard in self.storage.shards() {
+            if shard
+                .storage
+                .put_object_acl(bucket, key, acl_json)
+                .await
+                .is_ok()
+            {
+                changed += 1;
+            }
+        }
+
+        if changed < self.storage.config().data_shards {
+            return Err(MaxioError::InternalError(format!(
+                "failed to set object acl quorum: wrote {}, need {}",
+                changed,
+                self.storage.config().data_shards
+            )));
+        }
+
+        Ok(())
     }
 
     async fn delete_object(&self, bucket: &str, key: &str) -> Result<()> {

@@ -52,7 +52,10 @@ pub async fn get_config_kv(
         .get_config_value(&query.key)
         .map_err(AdminApiError::from)?
         .ok_or_else(|| {
-            AdminApiError(MaxioError::InvalidArgument(format!("config key not found: {}", query.key)))
+            AdminApiError(MaxioError::InvalidArgument(format!(
+                "config key not found: {}",
+                query.key
+            )))
         })?;
 
     Ok(Json(ConfigKV {

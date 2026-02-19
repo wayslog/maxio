@@ -22,6 +22,20 @@ pub enum MaxioError {
     SignatureDoesNotMatch,
     #[error("invalid argument: {0}")]
     InvalidArgument(String),
+    #[error("bucket policy does not exist for bucket: {0}")]
+    NoSuchBucketPolicy(String),
+    #[error("server-side encryption configuration not found for bucket: {0}")]
+    ServerSideEncryptionConfigurationNotFound(String),
+    #[error("object lock configuration not found for bucket: {0}")]
+    ObjectLockConfigurationNotFound(String),
+    #[error("cors configuration does not exist for bucket: {0}")]
+    NoSuchCORSConfiguration(String),
+    #[error("website configuration does not exist for bucket: {0}")]
+    NoSuchWebsiteConfiguration(String),
+    #[error("public access block configuration does not exist for bucket: {0}")]
+    NoSuchPublicAccessBlockConfiguration(String),
+    #[error("ownership controls configuration does not exist for bucket: {0}")]
+    OwnershipControlsNotFound(String),
     #[error("entity too large: size={size}, max_size={max_size}")]
     EntityTooLarge { size: u64, max_size: u64 },
     #[error(transparent)]
@@ -41,6 +55,15 @@ impl MaxioError {
             Self::AccessDenied(_) => "AccessDenied",
             Self::SignatureDoesNotMatch => "SignatureDoesNotMatch",
             Self::InvalidArgument(_) => "InvalidArgument",
+            Self::NoSuchBucketPolicy(_) => "NoSuchBucketPolicy",
+            Self::ServerSideEncryptionConfigurationNotFound(_) => {
+                "ServerSideEncryptionConfigurationNotFoundError"
+            }
+            Self::ObjectLockConfigurationNotFound(_) => "ObjectLockConfigurationNotFoundError",
+            Self::NoSuchCORSConfiguration(_) => "NoSuchCORSConfiguration",
+            Self::NoSuchWebsiteConfiguration(_) => "NoSuchWebsiteConfiguration",
+            Self::NoSuchPublicAccessBlockConfiguration(_) => "NoSuchPublicAccessBlockConfiguration",
+            Self::OwnershipControlsNotFound(_) => "OwnershipControlsNotFoundError",
             Self::EntityTooLarge { .. } => "EntityTooLarge",
             Self::Io(_) => "InternalError",
         }

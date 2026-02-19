@@ -1,11 +1,6 @@
 use std::sync::Arc;
 
-use axum::{
-    Json,
-    extract::State,
-    http::StatusCode,
-    response::IntoResponse,
-};
+use axum::{Json, extract::State, http::StatusCode, response::IntoResponse};
 use serde::Serialize;
 
 use crate::router::AdminState;

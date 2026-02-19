@@ -19,10 +19,22 @@ export AWS_MAX_ATTEMPTS AWS_RETRY_MODE AWS_CLI_CONNECT_TIMEOUT AWS_CLI_READ_TIME
 TEST_SCRIPTS=(
   "$SCRIPT_DIR/test_buckets.sh"
   "$SCRIPT_DIR/test_objects.sh"
+  "$SCRIPT_DIR/test_copy.sh"
+  "$SCRIPT_DIR/test_delete_objects.sh"
+  "$SCRIPT_DIR/test_acl.sh"
   "$SCRIPT_DIR/test_multipart.sh"
   "$SCRIPT_DIR/test_versioning.sh"
   "$SCRIPT_DIR/test_tagging.sh"
   "$SCRIPT_DIR/test_lifecycle.sh"
+  "$SCRIPT_DIR/test_cors.sh"
+  "$SCRIPT_DIR/test_encryption.sh"
+  "$SCRIPT_DIR/test_policy.sh"
+  "$SCRIPT_DIR/test_website.sh"
+  "$SCRIPT_DIR/test_logging.sh"
+  "$SCRIPT_DIR/test_object_lock.sh"
+  "$SCRIPT_DIR/test_public_access.sh"
+  "$SCRIPT_DIR/test_ownership.sh"
+  "$SCRIPT_DIR/test_conditional.sh"
 )
 
 PASS_COUNT=0

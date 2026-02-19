@@ -17,9 +17,9 @@ use tokio::fs::{self, OpenOptions};
 use tracing::{debug, warn};
 
 use crate::{
+    LifecycleSys,
     system::is_expired,
     types::{LifecycleConfiguration, RuleStatus},
-    LifecycleSys,
 };
 
 const SCANNER_STATE_FILE: &str = ".scanner-state.json";
@@ -244,7 +244,9 @@ impl FolderScanner {
         let mut scanned_count = 0_u64;
 
         loop {
-            let page = object_layer.list_objects(bucket, "", &marker, "", 1000).await?;
+            let page = object_layer
+                .list_objects(bucket, "", &marker, "", 1000)
+                .await?;
             for object in page.objects {
                 scanned_count = scanned_count.saturating_add(1);
                 self.process_object(
@@ -284,7 +286,10 @@ impl FolderScanner {
         let cache_value = ScannerObjectCache {
             etag: object.etag.clone(),
             size: object.size,
-            last_modified_unix_nanos: object.last_modified.timestamp_nanos_opt().unwrap_or_default(),
+            last_modified_unix_nanos: object
+                .last_modified
+                .timestamp_nanos_opt()
+                .unwrap_or_default(),
         };
 
         let changed = self.old_cache.get(&cache_key) != Some(&cache_value);
@@ -322,13 +327,20 @@ impl FolderScanner {
             config.heal_check_sample_rate,
         ) {
             item.heal_selected = true;
-            item.heal_verified = self.verify_integrity(object_layer, bucket, &object.key).await;
+            item.heal_verified = self
+                .verify_integrity(object_layer, bucket, &object.key)
+                .await;
         }
 
         self.update_cache.insert(cache_key, item);
     }
 
-    async fn verify_integrity(&self, object_layer: &dyn ObjectLayer, bucket: &str, key: &str) -> bool {
+    async fn verify_integrity(
+        &self,
+        object_layer: &dyn ObjectLayer,
+        bucket: &str,
+        key: &str,
+    ) -> bool {
         match object_layer.get_object(bucket, key, None).await {
             Ok(_) => true,
             Err(err) => {
@@ -367,7 +379,11 @@ impl FolderScanner {
                 .unwrap_or_default()
                 .to_string();
             let key = (item.bucket.clone(), branch);
-            let next_count = branch_counters.get(&key).copied().unwrap_or(0).saturating_add(1);
+            let next_count = branch_counters
+                .get(&key)
+                .copied()
+                .unwrap_or(0)
+                .saturating_add(1);
             branch_counters.insert(key, next_count);
         }
 

@@ -1,11 +1,6 @@
 use std::sync::Arc;
 
-use axum::{
-    Json,
-    extract::Extension,
-    http::StatusCode,
-    response::IntoResponse,
-};
+use axum::{Json, extract::Extension, http::StatusCode, response::IntoResponse};
 use maxio_distributed::DistributedSys;
 
 pub async fn health_live() -> impl IntoResponse {

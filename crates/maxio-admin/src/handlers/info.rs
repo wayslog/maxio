@@ -8,7 +8,9 @@ use crate::{
     types::{AdminInfo, ServerProperties, ServiceStatus, StorageInfo},
 };
 
-pub async fn server_info(State(admin): State<Arc<AdminSys>>) -> Result<Json<AdminInfo>, AdminApiError> {
+pub async fn server_info(
+    State(admin): State<Arc<AdminSys>>,
+) -> Result<Json<AdminInfo>, AdminApiError> {
     let storage = collect_storage_info(admin.object_layer()).await?;
     let services = ServiceStatus {
         iam: "online".to_string(),
@@ -36,7 +38,10 @@ pub async fn server_info(State(admin): State<Arc<AdminSys>>) -> Result<Json<Admi
 async fn collect_storage_info(
     object_layer: Arc<dyn maxio_storage::traits::ObjectLayer>,
 ) -> Result<StorageInfo, AdminApiError> {
-    let buckets = object_layer.list_buckets().await.map_err(AdminApiError::from)?;
+    let buckets = object_layer
+        .list_buckets()
+        .await
+        .map_err(AdminApiError::from)?;
 
     let mut used_bytes: u64 = 0;
     for bucket in &buckets {

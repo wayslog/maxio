@@ -6,12 +6,7 @@ use axum::{
 };
 use maxio_common::error::MaxioError;
 
-use crate::{
-    AdminSys,
-    batch::BatchJob,
-    handlers::AdminApiError,
-    types::BatchJobSubmitRequest,
-};
+use crate::{AdminSys, batch::BatchJob, handlers::AdminApiError, types::BatchJobSubmitRequest};
 
 pub async fn submit_batch_job(
     State(admin): State<Arc<AdminSys>>,

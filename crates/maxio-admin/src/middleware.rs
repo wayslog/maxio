@@ -11,7 +11,11 @@ use tracing::debug;
 
 use crate::AdminSys;
 
-pub async fn admin_auth(admin: axum::extract::State<std::sync::Arc<AdminSys>>, req: Request, next: Next) -> Response {
+pub async fn admin_auth(
+    admin: axum::extract::State<std::sync::Arc<AdminSys>>,
+    req: Request,
+    next: Next,
+) -> Response {
     let admin = admin.0;
 
     let auth_header = req

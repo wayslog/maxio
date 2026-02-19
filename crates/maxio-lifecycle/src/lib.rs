@@ -7,6 +7,6 @@ pub use scanner::{FolderScanner, ScanMode, ScannerConfig, ScannerCycle, ScannerI
 pub use store::LifecycleStore;
 pub use system::LifecycleSys;
 pub use types::{
-    Expiration, LifecycleConfiguration, LifecycleFilter, LifecycleRule, NoncurrentVersionExpiration,
-    RuleStatus,
+    Expiration, LifecycleConfiguration, LifecycleFilter, LifecycleRule,
+    NoncurrentVersionExpiration, RuleStatus,
 };

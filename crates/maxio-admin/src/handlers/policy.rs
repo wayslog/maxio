@@ -23,12 +23,11 @@ pub async fn add_policy(
     State(admin): State<Arc<AdminSys>>,
     Json(payload): Json<PolicyPutRequest>,
 ) -> Result<Json<MessageResponse>, AdminApiError> {
-    let mut policy: maxio_iam::Policy =
-        serde_json::from_value(payload.policy).map_err(|err| {
-            AdminApiError(MaxioError::InvalidArgument(format!(
-                "failed to parse policy document: {err}"
-            )))
-        })?;
+    let mut policy: maxio_iam::Policy = serde_json::from_value(payload.policy).map_err(|err| {
+        AdminApiError(MaxioError::InvalidArgument(format!(
+            "failed to parse policy document: {err}"
+        )))
+    })?;
 
     if policy.name.is_empty() {
         policy.name = payload.name;
@@ -73,6 +72,8 @@ pub async fn remove_policy(
 pub async fn list_policies(
     State(admin): State<Arc<AdminSys>>,
 ) -> Result<Json<Vec<maxio_iam::Policy>>, AdminApiError> {
-    let policies = admin.list_remembered_policies().map_err(AdminApiError::from)?;
+    let policies = admin
+        .list_remembered_policies()
+        .map_err(AdminApiError::from)?;
     Ok(Json(policies))
 }

@@ -26,6 +26,8 @@ const MULTIPART_DIR_NAME: &str = ".multipart";
 const MULTIPART_META_FILE_NAME: &str = "upload.json";
 const VERSIONING_FILE_NAME: &str = ".versioning.json";
 const VERSIONS_INDEX_FILE_NAME: &str = ".versions.json";
+const BUCKET_ACL_FILE_NAME: &str = ".acl.json";
+const OBJECT_ACL_FILE_NAME: &str = ".acl.json";
 const NULL_VERSION_ID: &str = "null";
 
 #[derive(Debug, Clone)]
@@ -205,6 +207,28 @@ impl XlStorage {
         Ok(())
     }
 
+    pub async fn get_bucket_acl(&self, bucket: &str) -> Result<Option<String>> {
+        validate_bucket_name(bucket)?;
+        ensure_bucket_exists(self, bucket).await?;
+
+        match fs::read_to_string(self.bucket_path(bucket).join(BUCKET_ACL_FILE_NAME)).await {
+            Ok(acl_json) => Ok(Some(acl_json)),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(err) => Err(MaxioError::Io(err)),
+        }
+    }
+
+    pub async fn put_bucket_acl(&self, bucket: &str, acl_json: &str) -> Result<()> {
+        validate_bucket_name(bucket)?;
+        ensure_bucket_exists(self, bucket).await?;
+        fs::write(
+            self.bucket_path(bucket).join(BUCKET_ACL_FILE_NAME),
+            acl_json.as_bytes(),
+        )
+        .await?;
+        Ok(())
+    }
+
     pub async fn put_object(
         &self,
         bucket: &str,
@@ -350,6 +374,34 @@ impl XlStorage {
         }
     }
 
+    pub async fn copy_object(
+        &self,
+        source_bucket: &str,
+        source_key: &str,
+        destination_bucket: &str,
+        destination_key: &str,
+        content_type: Option<&str>,
+        metadata: HashMap<String, String>,
+    ) -> Result<ObjectInfo> {
+        validate_bucket_name(source_bucket)?;
+        validate_object_key(source_key)?;
+        validate_bucket_name(destination_bucket)?;
+        validate_object_key(destination_key)?;
+        ensure_bucket_exists(self, source_bucket).await?;
+        ensure_bucket_exists(self, destination_bucket).await?;
+
+        let (_, source_data) = self.get_object(source_bucket, source_key, None).await?;
+        self.put_object(
+            destination_bucket,
+            destination_key,
+            source_data,
+            content_type,
+            metadata,
+            None,
+        )
+        .await
+    }
+
     pub async fn get_object(
         &self,
         bucket: &str,
@@ -443,6 +495,21 @@ impl XlStorage {
     ) -> Result<ObjectInfo> {
         let (object_info, _) = self.get_object(bucket, key, encryption).await?;
         Ok(object_info)
+    }
+
+    pub async fn get_object_acl(&self, bucket: &str, key: &str) -> Result<Option<String>> {
+        let (_, _, object_path) = self.read_object(bucket, key).await?;
+        match fs::read_to_string(object_path.join(OBJECT_ACL_FILE_NAME)).await {
+            Ok(acl_json) => Ok(Some(acl_json)),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(err) => Err(MaxioError::Io(err)),
+        }
+    }
+
+    pub async fn put_object_acl(&self, bucket: &str, key: &str, acl_json: &str) -> Result<()> {
+        let (_, _, object_path) = self.read_object(bucket, key).await?;
+        fs::write(object_path.join(OBJECT_ACL_FILE_NAME), acl_json.as_bytes()).await?;
+        Ok(())
     }
 
     pub async fn delete_object(&self, bucket: &str, key: &str) -> Result<()> {

@@ -8,8 +8,8 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use maxio_common::error::MaxioError;
-use maxio_lifecycle::types::LifecycleConfiguration;
 use maxio_lifecycle::LifecycleSys;
+use maxio_lifecycle::types::LifecycleConfiguration;
 use maxio_storage::traits::ObjectLayer;
 use quick_xml::{de::from_str as xml_from_str, se::to_string as xml_to_string};
 use serde::Serialize;
@@ -34,10 +34,7 @@ pub async fn get_bucket_lifecycle_configuration(
     Path(bucket): Path<String>,
 ) -> S3Result {
     store.get_bucket_info(&bucket).await?;
-    let config = lifecycle
-        .get_config(&bucket)
-        .await?
-        .unwrap_or_default();
+    let config = lifecycle.get_config(&bucket).await?.unwrap_or_default();
     xml_response(StatusCode::OK, &config)
 }
 

@@ -145,7 +145,10 @@ impl LifecycleSys {
             return;
         }
 
-        let versions = match object_layer.list_object_versions(bucket, prefix, i32::MAX).await {
+        let versions = match object_layer
+            .list_object_versions(bucket, prefix, i32::MAX)
+            .await
+        {
             Ok(versions) => versions,
             Err(err) => {
                 warn!(bucket = %bucket, prefix = %prefix, error = %err, "failed to list object versions for lifecycle scan");
@@ -196,10 +199,7 @@ fn validate_config(config: &LifecycleConfiguration) -> Result<()> {
                     rule.id
                 )));
             }
-            if exp
-                .days
-                .is_some_and(|days| days < 0)
-            {
+            if exp.days.is_some_and(|days| days < 0) {
                 return Err(MaxioError::InvalidArgument(format!(
                     "lifecycle rule {} expiration days must be non-negative",
                     rule.id

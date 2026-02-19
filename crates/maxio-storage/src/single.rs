@@ -50,6 +50,14 @@ impl ObjectLayer for SingleDiskObjectLayer {
         self.storage.set_bucket_versioning(bucket, state).await
     }
 
+    async fn get_bucket_acl(&self, bucket: &str) -> Result<Option<String>> {
+        self.storage.get_bucket_acl(bucket).await
+    }
+
+    async fn put_bucket_acl(&self, bucket: &str, acl_json: &str) -> Result<()> {
+        self.storage.put_bucket_acl(bucket, acl_json).await
+    }
+
     async fn put_object(
         &self,
         bucket: &str,
@@ -61,6 +69,27 @@ impl ObjectLayer for SingleDiskObjectLayer {
     ) -> Result<ObjectInfo> {
         self.storage
             .put_object(bucket, key, data, content_type, metadata, encryption)
+            .await
+    }
+
+    async fn copy_object(
+        &self,
+        source_bucket: &str,
+        source_key: &str,
+        destination_bucket: &str,
+        destination_key: &str,
+        content_type: Option<&str>,
+        metadata: HashMap<String, String>,
+    ) -> Result<ObjectInfo> {
+        self.storage
+            .copy_object(
+                source_bucket,
+                source_key,
+                destination_bucket,
+                destination_key,
+                content_type,
+                metadata,
+            )
             .await
     }
 
@@ -92,6 +121,14 @@ impl ObjectLayer for SingleDiskObjectLayer {
         encryption: Option<GetEncryptionOptions>,
     ) -> Result<ObjectInfo> {
         self.storage.get_object_info(bucket, key, encryption).await
+    }
+
+    async fn get_object_acl(&self, bucket: &str, key: &str) -> Result<Option<String>> {
+        self.storage.get_object_acl(bucket, key).await
+    }
+
+    async fn put_object_acl(&self, bucket: &str, key: &str, acl_json: &str) -> Result<()> {
+        self.storage.put_object_acl(bucket, key, acl_json).await
     }
 
     async fn delete_object(&self, bucket: &str, key: &str) -> Result<()> {

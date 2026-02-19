@@ -1,8 +1,8 @@
-pub mod health;
-pub mod metrics;
-pub mod config;
 pub mod batch;
+pub mod config;
+pub mod health;
 pub mod info;
+pub mod metrics;
 pub mod policy;
 pub mod user;
 
@@ -20,7 +20,9 @@ impl From<MaxioError> for AdminApiError {
 impl IntoResponse for AdminApiError {
     fn into_response(self) -> axum::response::Response {
         let status = match self.0 {
-            MaxioError::AccessDenied(_) | MaxioError::SignatureDoesNotMatch => StatusCode::FORBIDDEN,
+            MaxioError::AccessDenied(_) | MaxioError::SignatureDoesNotMatch => {
+                StatusCode::FORBIDDEN
+            }
             MaxioError::InvalidArgument(_) => StatusCode::BAD_REQUEST,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };

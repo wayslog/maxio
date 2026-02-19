@@ -26,7 +26,11 @@ fn xml_response(status: StatusCode, xml: String) -> S3Result {
 }
 
 fn validate_replication_config(config: &ReplicationConfig) -> Result<(), MaxioError> {
-    if config.role.as_deref().is_none_or(|role| role.trim().is_empty()) {
+    if config
+        .role
+        .as_deref()
+        .is_none_or(|role| role.trim().is_empty())
+    {
         return Err(MaxioError::InvalidArgument(
             "replication Role is required".to_string(),
         ));
@@ -111,7 +115,9 @@ pub async fn get_bucket_replication(
         })?;
 
     let config_body = std::str::from_utf8(&body).map_err(|err| {
-        MaxioError::InternalError(format!("stored replication config is not valid UTF-8: {err}"))
+        MaxioError::InternalError(format!(
+            "stored replication config is not valid UTF-8: {err}"
+        ))
     })?;
     let config = ReplicationConfig::from_xml(config_body)?;
     let xml = config.to_xml()?;

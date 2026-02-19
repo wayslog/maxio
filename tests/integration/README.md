@@ -7,6 +7,9 @@ This directory contains end-to-end S3 API integration tests for maxio using shel
 - `s3_test.sh`: Main test runner, executes all test suites and prints a summary.
 - `test_buckets.sh`: Bucket operation tests.
 - `test_objects.sh`: Object operation tests.
+- `test_copy.sh`: CopyObject tests.
+- `test_delete_objects.sh`: DeleteObjects tests.
+- `test_acl.sh`: Bucket/Object ACL tests.
 - `test_multipart.sh`: Multipart upload tests.
 - `test_versioning.sh`: Versioning tests.
 - `test_tagging.sh`: Object tagging tests.
@@ -59,6 +62,29 @@ The scripts always pass `--endpoint-url "$S3_ENDPOINT_URL"` to every `aws s3`/`a
 - List objects (v1 and v2)
 - Put object with metadata
 - Get object with range requests
+
+### CopyObject tests
+
+- Copy object within same bucket
+- Copy object to a different bucket
+- Copy metadata with `COPY` and `REPLACE` directives
+- Conditional copy with `x-amz-copy-source-if-match`
+- Source and copied object content validation
+
+### DeleteObjects tests
+
+- Delete multiple objects in one request
+- Delete with `Quiet` mode
+- Delete non-existent objects without errors
+- Verify object removal with follow-up `head-object`
+
+### ACL tests
+
+- Get default bucket ACL
+- Put bucket ACL with canned ACLs (`private`, `public-read`)
+- Get object ACL
+- Put object ACL
+- Verify ACL owner/grant structure in responses
 
 ### Multipart tests
 

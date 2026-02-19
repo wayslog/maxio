@@ -85,7 +85,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         StaticCredentialProvider::with_iam(access_key, secret_key, Arc::clone(&iam)),
     );
 
-    let mut notification_sys = NotificationSys::new(NotificationStore::new(notification_root.clone()));
+    let mut notification_sys =
+        NotificationSys::new(NotificationStore::new(notification_root.clone()));
     if let Ok(endpoint) = std::env::var("MAXIO_NOTIFY_WEBHOOK_ENDPOINT") {
         let endpoint = endpoint.trim();
         if !endpoint.is_empty() {
@@ -120,8 +121,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("lifecycle background scanner enabled");
 
     let default_node_endpoint = format!("http://127.0.0.1:{}", cli.port);
-    let cluster_config = ClusterConfig::from_env()
-        .unwrap_or_else(|| ClusterConfig::single(default_node_endpoint));
+    let cluster_config =
+        ClusterConfig::from_env().unwrap_or_else(|| ClusterConfig::single(default_node_endpoint));
     let distributed_sys = Arc::new(DistributedSys::new(cluster_config).await);
 
     let app = maxio_s3_api::router::s3_router(

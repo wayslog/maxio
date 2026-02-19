@@ -97,11 +97,20 @@ pub async fn put_object_tagging(
     let (info, data) = store.get_object(&bucket, &key, None).await?;
     let mut metadata = info.metadata;
     let serialized_tags = serde_json::to_string(&payload.tag_set.tags).map_err(|err| {
-        MaxioError::InternalError(format!("failed to serialize object tags for storage: {err}"))
+        MaxioError::InternalError(format!(
+            "failed to serialize object tags for storage: {err}"
+        ))
     })?;
     metadata.insert(OBJECT_TAGS_METADATA_KEY.to_string(), serialized_tags);
     store
-        .put_object(&bucket, &key, data, Some(&info.content_type), metadata, None)
+        .put_object(
+            &bucket,
+            &key,
+            data,
+            Some(&info.content_type),
+            metadata,
+            None,
+        )
         .await?;
 
     Ok(StatusCode::OK.into_response())
@@ -128,7 +137,14 @@ pub async fn delete_object_tagging(
     let mut metadata = info.metadata;
     metadata.remove(OBJECT_TAGS_METADATA_KEY);
     store
-        .put_object(&bucket, &key, data, Some(&info.content_type), metadata, None)
+        .put_object(
+            &bucket,
+            &key,
+            data,
+            Some(&info.content_type),
+            metadata,
+            None,
+        )
         .await?;
 
     Ok(StatusCode::NO_CONTENT.into_response())
