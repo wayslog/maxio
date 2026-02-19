@@ -17,6 +17,7 @@ use maxio_storage::traits::ObjectLayer;
 use crate::handlers;
 
 use crate::error::S3Error;
+use crate::middleware::response_headers::ResponseHeadersLayer;
 
 const MAX_BODY_SIZE: usize = 5 * 1024 * 1024 * 1024; // 5GB
 
@@ -350,6 +351,7 @@ pub fn s3_router(
         );
 
     app.layer(DefaultBodyLimit::max(MAX_BODY_SIZE))
+        .layer(ResponseHeadersLayer::new())
         .layer(AuthLayer::new(credential_provider))
         .layer(Extension(iam))
         .layer(Extension(notifications))

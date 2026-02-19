@@ -1,5 +1,6 @@
 pub mod error;
 pub mod hash;
+pub mod request_id;
 pub mod time;
 pub mod types;
 pub mod xml;
