@@ -56,6 +56,137 @@ pub struct MessageResponse {
     pub message: String,
 }
 
+#[derive(Debug, Serialize)]
+pub struct ServerInfoResponse {
+    pub mode: String,
+    pub region: String,
+    #[serde(rename = "sqsARN")]
+    pub sqs_arn: Vec<String>,
+    #[serde(rename = "deploymentID")]
+    pub deployment_id: String,
+    pub buckets: BucketUsageInfo,
+    pub objects: ObjectsUsageInfo,
+    pub versions: ObjectsUsageInfo,
+    #[serde(rename = "deleteMarkers")]
+    pub delete_markers: ObjectsUsageInfo,
+    pub usage: UsageInfo,
+    pub services: ServicesInfo,
+    pub backend: BackendInfo,
+    pub servers: Vec<ServerProperties>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BucketUsageInfo {
+    pub count: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ObjectsUsageInfo {
+    pub count: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct UsageInfo {
+    pub size: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ServicesInfo {
+    pub vault: ServiceStatus,
+    pub ldap: ServiceStatus,
+    pub notifications: Vec<Value>,
+    pub audit: Vec<Value>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ServiceStatus {
+    pub status: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BackendInfo {
+    #[serde(rename = "backendType")]
+    pub backend_type: String,
+    #[serde(rename = "rrSCParity")]
+    pub rr_sc_parity: i32,
+    #[serde(rename = "standardSCParity")]
+    pub standard_sc_parity: i32,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ServerProperties {
+    pub state: String,
+    pub endpoint: String,
+    pub uptime: u64,
+    pub version: String,
+    #[serde(rename = "commitID")]
+    pub commit_id: String,
+    pub network: std::collections::HashMap<String, String>,
+    pub drives: Vec<DriveInfo>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DriveInfo {
+    pub uuid: String,
+    pub endpoint: String,
+    pub state: String,
+    #[serde(rename = "rootDisk")]
+    pub root_disk: bool,
+    #[serde(rename = "drivePath")]
+    pub drive_path: String,
+    #[serde(rename = "totalSpace")]
+    pub total_space: u64,
+    #[serde(rename = "usedSpace")]
+    pub used_space: u64,
+    #[serde(rename = "availableSpace")]
+    pub available_space: u64,
+}
+
+pub async fn server_info() -> Result<impl IntoResponse, S3Error> {
+    let uptime = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let info = ServerInfoResponse {
+        mode: "local".to_string(),
+        region: "us-east-1".to_string(),
+        sqs_arn: vec![],
+        deployment_id: "maxio-deployment".to_string(),
+        buckets: BucketUsageInfo { count: 0 },
+        objects: ObjectsUsageInfo { count: 0 },
+        versions: ObjectsUsageInfo { count: 0 },
+        delete_markers: ObjectsUsageInfo { count: 0 },
+        usage: UsageInfo { size: 0 },
+        services: ServicesInfo {
+            vault: ServiceStatus {
+                status: "disabled".to_string(),
+            },
+            ldap: ServiceStatus {
+                status: "disabled".to_string(),
+            },
+            notifications: vec![],
+            audit: vec![],
+        },
+        backend: BackendInfo {
+            backend_type: "Erasure".to_string(),
+            rr_sc_parity: 2,
+            standard_sc_parity: 2,
+        },
+        servers: vec![ServerProperties {
+            state: "ok".to_string(),
+            endpoint: "localhost:9000".to_string(),
+            uptime,
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            commit_id: "maxio".to_string(),
+            network: std::collections::HashMap::new(),
+            drives: vec![],
+        }],
+    };
+
+    Ok((StatusCode::OK, Json(info)))
+}
+
 pub async fn add_user(
     Extension(iam): Extension<Arc<IAMSys>>,
     Json(payload): Json<AddUserRequest>,
