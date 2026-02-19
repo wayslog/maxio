@@ -64,7 +64,7 @@ test_create_upload_and_upload_part_impl() {
   local part_file="$SCRIPT_DIR/.tmp-mpu-part-$RANDOM.bin"
   local upload_id
 
-  dd if=/dev/zero of="$part_file" bs=1m count=1 >/dev/null 2>&1
+  dd if=/dev/zero of="$part_file" bs=1048576 count=1 >/dev/null 2>&1
 
   upload_id="$(aws s3api create-multipart-upload --bucket "$bucket" --key 'multipart.bin' --query 'UploadId' --output text "${AWS_ARGS[@]}")"
   aws s3api upload-part --bucket "$bucket" --key 'multipart.bin' --part-number 1 --upload-id "$upload_id" --body "$part_file" "${AWS_ARGS[@]}" >/dev/null
@@ -79,7 +79,7 @@ test_complete_multipart_upload_impl() {
   local complete_json="$SCRIPT_DIR/.tmp-mpu-complete-$RANDOM.json"
   local upload_id etag
 
-  dd if=/dev/zero of="$part_file" bs=1m count=1 >/dev/null 2>&1
+  dd if=/dev/zero of="$part_file" bs=1048576 count=1 >/dev/null 2>&1
   upload_id="$(aws s3api create-multipart-upload --bucket "$bucket" --key 'complete.bin' --query 'UploadId' --output text "${AWS_ARGS[@]}")"
   etag="$(aws s3api upload-part --bucket "$bucket" --key 'complete.bin' --part-number 1 --upload-id "$upload_id" --body "$part_file" --query 'ETag' --output text "${AWS_ARGS[@]}")"
 
@@ -105,7 +105,7 @@ test_abort_multipart_upload_impl() {
   local part_file="$SCRIPT_DIR/.tmp-mpu-abort-part-$RANDOM.bin"
   local upload_id
 
-  dd if=/dev/zero of="$part_file" bs=1m count=1 >/dev/null 2>&1
+  dd if=/dev/zero of="$part_file" bs=1048576 count=1 >/dev/null 2>&1
   upload_id="$(aws s3api create-multipart-upload --bucket "$bucket" --key 'abort.bin' --query 'UploadId' --output text "${AWS_ARGS[@]}")"
   aws s3api upload-part --bucket "$bucket" --key 'abort.bin' --part-number 1 --upload-id "$upload_id" --body "$part_file" "${AWS_ARGS[@]}" >/dev/null
   aws s3api abort-multipart-upload --bucket "$bucket" --key 'abort.bin' --upload-id "$upload_id" "${AWS_ARGS[@]}" >/dev/null
@@ -132,7 +132,7 @@ test_large_file_upload_via_cp_impl() {
   local bucket="$1"
   local large_file="$SCRIPT_DIR/.tmp-large-$RANDOM.bin"
 
-  dd if=/dev/zero of="$large_file" bs=1m count=20 >/dev/null 2>&1
+  dd if=/dev/zero of="$large_file" bs=1048576 count=20 >/dev/null 2>&1
   aws s3 cp "$large_file" "s3://$bucket/large.bin" "${AWS_ARGS[@]}" >/dev/null
   aws s3api head-object --bucket "$bucket" --key 'large.bin' "${AWS_ARGS[@]}" >/dev/null
 

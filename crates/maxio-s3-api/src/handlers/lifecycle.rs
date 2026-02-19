@@ -34,8 +34,13 @@ pub async fn get_bucket_lifecycle_configuration(
     Path(bucket): Path<String>,
 ) -> S3Result {
     store.get_bucket_info(&bucket).await?;
-    let config = lifecycle.get_config(&bucket).await?.unwrap_or_default();
-    xml_response(StatusCode::OK, &config)
+    match lifecycle.get_config(&bucket).await? {
+        Some(config) => xml_response(StatusCode::OK, &config),
+        None => Err(MaxioError::InvalidArgument(
+            "The lifecycle configuration does not exist".to_string(),
+        )
+        .into()),
+    }
 }
 
 pub async fn put_bucket_lifecycle_configuration(

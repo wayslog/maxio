@@ -101,7 +101,7 @@ test_get_object_if_match_non_matching_impl() {
   local out_file
 
   out_file="$SCRIPT_DIR/.tmp-conditional-if-match-fail-$RANDOM.txt"
-  expect_aws_error_status '412' aws s3api get-object --bucket "$bucket" --key 'conditional.txt' --if-match '"00000000000000000000000000000000"' "$out_file" "${AWS_ARGS[@]}"
+  expect_aws_error_status 'PreconditionFailed' aws s3api get-object --bucket "$bucket" --key 'conditional.txt' --if-match '"00000000000000000000000000000000"' "$out_file" "${AWS_ARGS[@]}"
   rm -f "$out_file"
 }
 
@@ -139,7 +139,7 @@ test_get_object_if_unmodified_since_impl() {
   local out_file
 
   out_file="$SCRIPT_DIR/.tmp-conditional-if-unmodified-since-$RANDOM.txt"
-  expect_aws_error_status '412' aws s3api get-object --bucket "$bucket" --key 'conditional.txt' --if-unmodified-since 'Mon, 01 Jan 1990 00:00:00 GMT' "$out_file" "${AWS_ARGS[@]}"
+  expect_aws_error_status 'PreconditionFailed' aws s3api get-object --bucket "$bucket" --key 'conditional.txt' --if-unmodified-since 'Mon, 01 Jan 1990 00:00:00 GMT' "$out_file" "${AWS_ARGS[@]}"
   rm -f "$out_file"
 }
 

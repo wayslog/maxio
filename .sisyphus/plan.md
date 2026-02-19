@@ -1147,3 +1147,157 @@ pub struct XlMetaV2Object {
 > 注: Rust 预估行数通常比 Go 少 15-20%，因为 Rust 的类型系统和 trait 可以减少样板代码，
 > 但错误处理和生命周期标注会增加部分代码量。
 
+---
+
+## 十一、Phase 15-24: MinIO 100% 二进制兼容实现计划
+
+> 更新日期: 2026-02-19
+> 目标: 实现与 MinIO 100% API 兼容，包括所有 S3 API、Admin API、STS、KMS、Health、Metrics
+
+### Phase 15: S3 Response Format Compatibility [HIGH PRIORITY]
+
+目标: 让所有 S3 响应的格式与 MinIO 完全一致
+
+1. **Request ID 生成**: 实现 `mustGetRequestID` -- 使用时间戳纳秒的十六进制格式 `format!("{:X}", nanos)`
+2. **标准响应头**: 每个响应添加 `x-amz-request-id`, `x-amz-id-2`, `Server: MinIO`
+3. **响应头中间件**: 创建 axum middleware layer 自动注入标准头
+4. **错误响应格式**: 修复 error.rs -- RequestId 使用真实值，添加 BucketName/Key/HostID 字段
+5. **CORS 中间件**: 实现 corsHandler，支持 AllowOriginFunc + 通配符匹配
+6. **扩展错误码**: 从 MinIO api-errors.go 移植完整的 200+ 错误码映射表
+7. **XML 命名空间**: 确保所有 XML 响应使用 `http://s3.amazonaws.com/doc/2006-03-01/` 命名空间
+
+成功标准: 所有 18 个现有测试套件继续通过，响应头包含 x-amz-request-id
+
+### Phase 16: Missing Core S3 Operations [HIGH PRIORITY]
+
+目标: 补全 MinIO 支持但 maxio 缺失的核心 S3 操作
+
+1. **BucketTagging**: GET/PUT/DELETE /{bucket}?tagging -- 桶级别标签
+2. **CopyObjectPart (UploadPartCopy)**: PUT /{object}?partNumber&uploadId + x-amz-copy-source
+3. **GetBucketAccelerate**: GET /{bucket}?accelerate -- dummy 返回
+4. **ListenNotification**: GET /{bucket}?events -- SSE 事件流监听
+5. **PostRestoreObject**: POST /{object}?restore -- Glacier 恢复 (stub)
+6. **ListObjectsV2M**: GET /{bucket}?list-type=2&metadata=true -- 带元数据的列表
+7. **ListObjectVersionsM**: GET /{bucket}?versions&metadata=true -- 带元数据的版本列表
+8. **NotImplemented 路由**: 注册 MinIO 的 rejectedObjAPIs 和 rejectedBucketAPIs 返回 NotImplemented
+
+成功标准: 新增集成测试 test_bucket_tagging.sh, test_copy_part.sh 通过
+
+### Phase 17: Auth Hardening [HIGH PRIORITY]
+
+目标: 支持 MinIO 的完整认证体系
+
+1. **Presigned URL V4**: 验证 X-Amz-Signature 查询参数签名
+2. **Presigned URL V2**: 验证 Signature 查询参数 (legacy)
+3. **Signature V2**: 支持 Authorization: AWS accessKey:signature 格式
+4. **Streaming Signature (aws-chunked)**: 实现 newSignV4ChunkedReader，支持 Content-Encoding: aws-chunked
+5. **PostPolicy Auth**: 实现 isRequestPostPolicySignatureV4 + doesPolicySignatureV4Match
+6. **Anonymous Access**: 当无 Authorization 头时，检查 bucket policy 是否允许公开访问
+7. **Auth Type Detection**: 实现 getRequestAuthType 函数，区分所有 11 种认证类型
+
+成功标准: presigned URL 测试通过，aws-cli 的 presign 命令可用
+
+### Phase 18: STS API [MEDIUM PRIORITY]
+
+目标: 实现 Security Token Service
+
+1. **STS Router**: POST / 路由，根据 Action 参数分发
+2. **AssumeRole**: 使用 SigV4 认证，返回临时凭证
+3. **AssumeRoleWithWebIdentity**: OIDC token 换取临时凭证
+4. **AssumeRoleWithClientGrants**: Client credentials 换取临时凭证
+5. **临时凭证存储**: 在 IAMSys 中管理临时凭证的生命周期
+6. **Token 验证**: 在 auth middleware 中支持 X-Amz-Security-Token
+
+成功标准: mc admin 可以创建和使用临时凭证
+
+### Phase 19: Health + Metrics [MEDIUM PRIORITY]
+
+目标: 完善健康检查和监控端点
+
+1. **HEAD 方法支持**: /minio/health/live, /minio/health/cluster 支持 HEAD
+2. **Readiness Check**: GET/HEAD /minio/health/ready
+3. **Cluster Read Check**: GET/HEAD /minio/health/cluster/read
+4. **Prometheus Metrics**: GET /minio/prometheus/metrics -- 基础指标
+5. **V2 Metrics**: /minio/v2/metrics/cluster, /bucket, /node, /resource
+6. **V3 Metrics**: /minio/metrics/v3{pathComps:.*}
+
+成功标准: curl /minio/health/ready 返回 200, Prometheus 可以抓取 metrics
+
+### Phase 20: Admin API - Core [MEDIUM PRIORITY]
+
+目标: 实现 mc admin 常用的管理 API
+
+1. **ServerInfo**: GET /minio/admin/v3/info -- 服务器信息
+2. **StorageInfo**: GET /minio/admin/v3/storageinfo -- 存储信息
+3. **DataUsageInfo**: GET /minio/admin/v3/datausageinfo -- 数据使用量
+4. **Config KV**: get-config-kv, set-config-kv, del-config-kv, help-config-kv
+5. **Full IAM Users**: AddUser, SetUserStatus, RemoveUser, ListUsers (with bucket filter), GetUserInfo
+6. **IAM Groups**: UpdateGroupMembers, GetGroup, ListGroups, SetGroupStatus
+7. **Service Accounts**: AddServiceAccount, UpdateServiceAccount, InfoServiceAccount, ListServiceAccounts, DeleteServiceAccount
+8. **IAM Policies Full**: InfoCannedPolicy, ListCannedPolicies, ListBucketPolicies, RemoveCannedPolicy, ListPolicyMappingEntities, AttachDetachPolicyBuiltin
+9. **AccountInfo**: GET /minio/admin/v3/accountinfo
+
+成功标准: `mc admin info` 和 `mc admin user list` 正常工作
+
+### Phase 21: Admin API - Operations [MEDIUM PRIORITY]
+
+目标: 实现运维操作相关的 Admin API
+
+1. **Service**: ServiceHandler (restart/stop), ServerUpdateHandler
+2. **Heal**: HealHandler, BackgroundHealStatusHandler
+3. **Pool Operations**: ListPools, StatusPool, StartDecommission, CancelDecommission
+4. **Batch Jobs**: StartBatchJob, ListBatchJobs, BatchJobStatus, DescribeBatchJob, CancelBatchJob
+5. **Tier Management**: AddTierHandler, EditTierHandler, ListTierHandler, RemoveTierHandler, VerifyTierHandler, TierStatsHandler
+6. **Speed Tests**: ObjectSpeedTestHandler, DriveSpeedtestHandler, NetperfHandler, SitePerfHandler
+7. **Diagnostics**: TraceHandler, ConsoleLogHandler, InspectDataHandler
+8. **Locks**: TopLocksHandler, ForceUnlockHandler
+9. **Profiling**: ProfileHandler
+
+成功标准: `mc admin heal`, `mc admin trace` 正常工作
+
+### Phase 22: Admin API - Advanced [LOW PRIORITY]
+
+目标: 实现高级管理功能
+
+1. **Site Replication**: 全部 17 个 site-replication 端点
+2. **Bucket Quota**: GetBucketQuotaConfigHandler, PutBucketQuotaConfigHandler
+3. **Replication Targets**: ListRemoteTargetsHandler, SetRemoteTargetHandler, RemoveRemoteTargetHandler
+4. **Replication Ops**: ReplicationDiffHandler, ReplicationMRFHandler
+5. **Bucket Metadata**: ExportBucketMetadataHandler, ImportBucketMetadataHandler
+6. **IAM Export/Import**: ExportIAM, ImportIAM, ImportIAMV2
+7. **Config History**: ListConfigHistoryKVHandler, ClearConfigHistoryKVHandler, RestoreConfigHistoryKVHandler
+8. **Config Bulk**: GetConfigHandler, SetConfigHandler
+
+成功标准: `mc admin replicate` 基本功能可用
+
+### Phase 23: KMS API + Enterprise Auth [LOW PRIORITY]
+
+目标: 实现 KMS 和企业级认证
+
+1. **KMS Router**: /minio/kms/v1/* 全部 7 个端点
+2. **KMS Admin**: /minio/admin/v3/kms/* 3 个端点
+3. **LDAP Auth**: AssumeRoleWithLDAPIdentity, LDAP service accounts, LDAP policy mapping
+4. **OpenID Auth**: AssumeRoleWithWebIdentity (full), OpenID access keys
+5. **Certificate Auth**: AssumeRoleWithCertificate
+6. **Custom Token Auth**: AssumeRoleWithCustomToken
+7. **IDP Config**: AddIdentityProviderCfg, UpdateIdentityProviderCfg, ListIdentityProviderCfg, GetIdentityProviderCfg, DeleteIdentityProviderCfg
+8. **STS Revocation**: RevokeTokens
+
+成功标准: KMS 状态查询可用，LDAP 认证流程可用
+
+### Phase 24: MinIO Extensions [LOW PRIORITY]
+
+目标: 实现 MinIO 特有的扩展功能
+
+1. **PutObjectExtract (Snowball)**: x-amz-snowball-extract=true 自动解压
+2. **GetObjectLambda**: lambdaArn 查询参数的对象转换
+3. **ListObjectsV2M**: list-type=2&metadata=true 带元数据列表
+4. **ListObjectVersionsM**: versions&metadata=true 带元数据版本列表
+5. **Replication Metrics**: GetBucketReplicationMetricsHandler, GetBucketReplicationMetricsV2Handler
+6. **Replication Reset**: ResetBucketReplicationStatusHandler, ResetBucketReplicationStartHandler
+7. **Replication Validation**: ValidateBucketReplicationCredsHandler
+8. **Rebalance**: RebalanceStart, RebalanceStatus, RebalanceStop
+9. **Speed Test Client**: ClientDevNull, ClientDevNullExtraTime
+
+成功标准: MinIO 扩展 API 全部可用
+

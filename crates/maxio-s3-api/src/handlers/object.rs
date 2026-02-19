@@ -239,6 +239,13 @@ fn write_object_headers(
         headers.insert(header_name, header_value(value)?);
     }
 
+    if let Some(version_id) = info.version_id.as_deref() {
+        headers.insert(
+            HeaderName::from_static("x-amz-version-id"),
+            header_value(version_id)?,
+        );
+    }
+
     if let Some(encryption) = info.encryption.as_ref() {
         write_encryption_response_headers(headers, encryption)?;
     }
@@ -588,7 +595,7 @@ fn match_etag_header_value(header_value: &str, object_etag: &str) -> bool {
 fn check_conditional_request_headers(
     headers: &HeaderMap,
     info: &ObjectInfo,
-) -> std::result::Result<Option<StatusCode>, MaxioError> {
+) -> std::result::Result<Option<Response>, MaxioError> {
     let object_etag = normalize_etag(&info.etag);
 
     if let Some(if_match) = headers
@@ -598,14 +605,14 @@ fn check_conditional_request_headers(
         .filter(|value| !value.is_empty())
         && !match_etag_header_value(if_match, object_etag)
     {
-        return Ok(Some(StatusCode::PRECONDITION_FAILED));
+        return Ok(Some(conditional_error_response(StatusCode::PRECONDITION_FAILED, "PreconditionFailed", "At least one of the pre-conditions you specified did not hold")));
     }
 
     if let Some(if_unmodified_since) =
         parse_conditional_header_time(headers, IF_UNMODIFIED_SINCE_HEADER)?
         && info.last_modified > if_unmodified_since
     {
-        return Ok(Some(StatusCode::PRECONDITION_FAILED));
+        return Ok(Some(conditional_error_response(StatusCode::PRECONDITION_FAILED, "PreconditionFailed", "At least one of the pre-conditions you specified did not hold")));
     }
 
     if let Some(if_none_match) = headers
@@ -615,17 +622,30 @@ fn check_conditional_request_headers(
         .filter(|value| !value.is_empty())
         && match_etag_header_value(if_none_match, object_etag)
     {
-        return Ok(Some(StatusCode::NOT_MODIFIED));
+        return Ok(Some((StatusCode::NOT_MODIFIED, HeaderMap::new()).into_response()));
     }
 
     if let Some(if_modified_since) =
         parse_conditional_header_time(headers, IF_MODIFIED_SINCE_HEADER)?
         && info.last_modified <= if_modified_since
     {
-        return Ok(Some(StatusCode::NOT_MODIFIED));
+        return Ok(Some((StatusCode::NOT_MODIFIED, HeaderMap::new()).into_response()));
     }
 
     Ok(None)
+}
+
+fn conditional_error_response(status: StatusCode, code: &str, message: &str) -> Response {
+    let body = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<Error>
+  <Code>{code}</Code>
+  <Message>{message}</Message>
+  <Resource>/</Resource>
+  <RequestId>0</RequestId>
+</Error>"#
+    );
+    (status, [("Content-Type", "application/xml")], body).into_response()
 }
 
 fn parse_metadata_directive(
@@ -797,6 +817,12 @@ pub async fn put_object(
 
     let mut response_headers = HeaderMap::new();
     response_headers.insert(ETAG, header_value(&quoted_etag(&info.etag))?);
+    if let Some(version_id) = info.version_id.as_deref() {
+        response_headers.insert(
+            HeaderName::from_static("x-amz-version-id"),
+            header_value(version_id)?,
+        );
+    }
     if let Some(encryption) = info.encryption.as_ref() {
         write_encryption_response_headers(&mut response_headers, encryption)?;
     }
@@ -842,7 +868,7 @@ pub async fn get_object(
                 .get_object_version(&bucket, &key, version_id, encryption.clone())
                 .await?;
             if let Some(status) = check_conditional_request_headers(&headers, &object_version.0)? {
-                return Ok(status.into_response());
+                return Ok(status);
             }
             object_version
         }
@@ -851,7 +877,7 @@ pub async fn get_object(
                 .get_object_info(&bucket, &key, encryption.clone())
                 .await?;
             if let Some(status) = check_conditional_request_headers(&headers, &info)? {
-                return Ok(status.into_response());
+                return Ok(status);
             }
             store.get_object(&bucket, &key, encryption).await?
         }
@@ -928,17 +954,16 @@ pub async fn head_object(
     let encryption = parse_sse_c_headers(&headers, false)?;
     let info = store.get_object_info(&bucket, &key, encryption).await?;
     if let Some(status) = check_conditional_request_headers(&headers, &info)? {
-        return Ok(status.into_response());
+        return Ok(status);
     }
-    let mut response = Response::new(Body::empty());
-    *response.status_mut() = StatusCode::OK;
     let content_len = if info.size >= 0 {
         info.size as usize
     } else {
         0
     };
-    write_object_headers(response.headers_mut(), &info, content_len)?;
-    Ok(response)
+    let mut response_headers = HeaderMap::new();
+    write_object_headers(&mut response_headers, &info, content_len)?;
+    Ok((StatusCode::OK, response_headers).into_response())
 }
 
 pub async fn get_object_attributes(
