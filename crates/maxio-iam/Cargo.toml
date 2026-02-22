@@ -15,3 +15,15 @@ chrono = { workspace = true }
 reqwest = { workspace = true }
 base64 = { workspace = true }
 urlencoding = "2"
+uuid = { workspace = true }
+# LDAP support
+ldap3 = { version = "0.11", optional = true }
+native-tls = { version = "0.2", optional = true }
+# OpenID Connect support
+jsonwebtoken = { version = "9", optional = true }
+
+[features]
+default = []
+ldap = ["ldap3", "native-tls"]
+openid = ["jsonwebtoken"]
+all-identity = ["ldap", "openid"]

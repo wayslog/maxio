@@ -1122,6 +1122,58 @@ pub async fn list_objects_v1(
     xml_response(StatusCode::OK, &payload)
 }
 
+pub async fn restore_object(
+    State(store): State<Arc<dyn ObjectLayer>>,
+    Path((bucket, key)): Path<(String, String)>,
+    Query(query): Query<HashMap<String, String>>,
+    body: Bytes,
+) -> S3Result {
+    let version_id = query
+        .get("versionId")
+        .cloned()
+        .filter(|v| !v.is_empty());
+    let info = if let Some(vid) = version_id.as_deref() {
+        store.get_object_version(&bucket, &key, vid, None).await?.0
+    } else {
+        store.get_object_info(&bucket, &key, None).await?
+    };
+    let days = if body.is_empty() {
+        1
+    } else {
+        let body_str = String::from_utf8_lossy(&body);
+        body_str
+            .lines()
+            .find(|line| line.contains("<Days>"))
+            .and_then(|line| {
+                let start = line.find("<Days>")? + 6;
+                let end = line.find("</Days>")?;
+                line[start..end].parse::<i32>().ok()
+            })
+            .unwrap_or(1)
+    };
+    if days < 1 || days > 30 {
+        return Err(MaxioError::InvalidArgument(
+            "Days must be between 1 and 30".to_string(),
+        )
+        .into());
+    }
+    let mut response_headers = HeaderMap::new();
+    if let Some(vid) = info.version_id.as_deref() {
+        response_headers.insert(
+            HeaderName::from_static("x-amz-version-id"),
+            header_value(vid)?,
+        );
+    }
+    response_headers.insert(
+        HeaderName::from_static("x-amz-restore"),
+        header_value(&format!(
+            "ongoing-request=\"false\", expiry-date=\"{}\"",
+            (Utc::now() + chrono::Duration::days(days as i64)).to_rfc2822()
+        ))?,
+    );
+    Ok((StatusCode::OK, response_headers).into_response())
+}
+
 pub async fn list_objects_v2(
     State(store): State<Arc<dyn ObjectLayer>>,
     Path(bucket): Path<String>,

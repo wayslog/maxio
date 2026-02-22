@@ -155,3 +155,26 @@ pub async fn site_replication_status(
         .body(Body::from(serde_json::to_string(&status).unwrap()))
         .unwrap()
 }
+
+pub async fn site_replication_edit(
+    Extension(config): Extension<Arc<RwLock<SiteReplicationConfig>>>,
+    Json(request): Json<SiteAddRequest>,
+) -> Response<Body> {
+    let mut config = config.write().await;
+    for site_input in request.sites {
+        if let Some(site) = config.sites.iter_mut().find(|s| s.name == site_input.name) {
+            site.endpoint = site_input.endpoint;
+            site.access_key = site_input.access_key;
+            site.secret_key = site_input.secret_key;
+        }
+    }
+    let response = SiteAddResponse {
+        success: true,
+        message: "Site replication configuration updated".to_string(),
+    };
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", "application/json")
+        .body(Body::from(serde_json::to_string(&response).unwrap()))
+        .unwrap()
+}

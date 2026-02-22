@@ -3,12 +3,13 @@ use std::path::{Path, PathBuf};
 use maxio_common::error::{MaxioError, Result};
 use tokio::fs;
 
-use crate::types::{Policy, User};
+use crate::types::{Policy, ServiceAccount, User};
 
 #[derive(Debug, Clone)]
 pub struct IamStore {
     users_dir: PathBuf,
     policies_dir: PathBuf,
+    service_accounts_dir: PathBuf,
 }
 
 impl IamStore {
@@ -16,12 +17,15 @@ impl IamStore {
         let base = data_dir.as_ref().join(".iam");
         let users_dir = base.join("users");
         let policies_dir = base.join("policies");
+        let service_accounts_dir = base.join("service-accounts");
         fs::create_dir_all(&users_dir).await?;
         fs::create_dir_all(&policies_dir).await?;
+        fs::create_dir_all(&service_accounts_dir).await?;
 
         Ok(Self {
             users_dir,
             policies_dir,
+            service_accounts_dir,
         })
     }
 
@@ -70,12 +74,56 @@ impl IamStore {
         self.read_all_json::<Policy>(&self.policies_dir).await
     }
 
+    // Service account methods
+    pub async fn save_service_account(&self, sa: &ServiceAccount) -> Result<()> {
+        let path = self.service_account_path(&sa.access_key);
+        let data = serde_json::to_vec_pretty(sa).map_err(|err| {
+            MaxioError::InternalError(format!(
+                "failed to serialize service account {}: {err}",
+                sa.access_key
+            ))
+        })?;
+        fs::write(path, data).await?;
+        Ok(())
+    }
+
+    pub async fn get_service_account(&self, access_key: &str) -> Result<Option<ServiceAccount>> {
+        self.read_json_if_exists(self.service_account_path(access_key))
+            .await
+    }
+
+    pub async fn delete_service_account(&self, access_key: &str) -> Result<()> {
+        self.delete_if_exists(self.service_account_path(access_key))
+            .await
+    }
+
+    pub async fn list_service_accounts(&self) -> Result<Vec<ServiceAccount>> {
+        self.read_all_json::<ServiceAccount>(&self.service_accounts_dir)
+            .await
+    }
+
+    pub async fn list_service_accounts_for_user(
+        &self,
+        parent_user: &str,
+    ) -> Result<Vec<ServiceAccount>> {
+        let all = self.list_service_accounts().await?;
+        Ok(all
+            .into_iter()
+            .filter(|sa| sa.parent_user == parent_user)
+            .collect())
+    }
+
     fn user_path(&self, access_key: &str) -> PathBuf {
         self.users_dir.join(format!("{access_key}.json"))
     }
 
     fn policy_path(&self, name: &str) -> PathBuf {
         self.policies_dir.join(format!("{name}.json"))
+    }
+
+    fn service_account_path(&self, access_key: &str) -> PathBuf {
+        self.service_accounts_dir
+            .join(format!("{access_key}.json"))
     }
 
     async fn read_json_if_exists<T: serde::de::DeserializeOwned>(

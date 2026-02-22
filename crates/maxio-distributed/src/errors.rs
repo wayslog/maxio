@@ -37,4 +37,10 @@ pub enum GridError {
     Utf8(#[source] std::str::Utf8Error),
     #[error("node not connected: {0}")]
     NodeNotConnected(String),
+    #[error("connection failed: {0}")]
+    ConnectionFailed(String),
+    #[error("request failed: {0}")]
+    RequestFailed(String),
+    #[error("invalid response: {0}")]
+    InvalidResponse(String),
 }

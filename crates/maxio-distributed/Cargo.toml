@@ -22,3 +22,4 @@ sha2 = { workspace = true }
 hex = { workspace = true }
 rmp-serde = { workspace = true }
 tokio-tungstenite = "0.24"
+axum = { workspace = true }

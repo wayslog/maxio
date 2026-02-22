@@ -3,6 +3,7 @@ pub mod dsync;
 pub mod errors;
 pub mod grid;
 pub mod healing;
+pub mod peer;
 pub mod replication;
 pub mod site_replication;
 pub mod system;

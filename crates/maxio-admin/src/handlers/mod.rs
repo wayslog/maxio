@@ -1,12 +1,20 @@
 pub mod batch;
+pub mod bucket_admin;
 pub mod config;
+pub mod healing;
 pub mod health;
+pub mod idp_config;
 pub mod info;
+pub mod ldap;
 pub mod metrics;
+pub mod openid;
 pub mod policy;
+pub mod pools;
 pub mod profiling;
+pub mod service_account;
 pub mod site_replication;
 pub mod speedtest;
+pub mod tiers;
 pub mod trace;
 pub mod user;
 

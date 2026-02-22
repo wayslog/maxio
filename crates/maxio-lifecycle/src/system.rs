@@ -6,11 +6,13 @@ use maxio_common::{
     types::ObjectInfo,
 };
 use maxio_storage::traits::{ObjectLayer, ObjectVersion};
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::{
     store::LifecycleStore,
-    types::{LifecycleConfiguration, LifecycleRule, RuleStatus},
+    types::{
+        Action, LifecycleConfiguration, LifecycleRule, ObjectOpts, RuleStatus,
+    },
 };
 
 pub struct LifecycleSys {
@@ -69,11 +71,7 @@ impl LifecycleSys {
             if rule.status != RuleStatus::Enabled {
                 continue;
             }
-            let prefix = rule
-                .filter
-                .as_ref()
-                .and_then(|filter| filter.prefix.clone())
-                .unwrap_or_default();
+            let prefix = rule.get_prefix();
             by_prefix.entry(prefix).or_default().push(rule);
         }
 
@@ -81,9 +79,9 @@ impl LifecycleSys {
             if rules.is_empty() {
                 continue;
             }
-            self.apply_current_version_rules(object_layer, bucket, &prefix, &rules)
+            self.apply_current_version_rules(object_layer, bucket, &prefix, config)
                 .await;
-            self.apply_noncurrent_version_rules(object_layer, bucket, &prefix, &rules)
+            self.apply_noncurrent_version_rules(object_layer, bucket, &prefix, config)
                 .await;
         }
 
@@ -95,7 +93,7 @@ impl LifecycleSys {
         object_layer: &dyn ObjectLayer,
         bucket: &str,
         prefix: &str,
-        rules: &[&LifecycleRule],
+        config: &LifecycleConfiguration,
     ) {
         let mut marker = String::new();
         loop {
@@ -111,10 +109,44 @@ impl LifecycleSys {
             };
 
             for object in page.objects {
-                if rules.iter().any(|rule| is_expired(&object, rule)) {
-                    if let Err(err) = object_layer.delete_object(bucket, &object.key).await {
-                        warn!(bucket = %bucket, key = %object.key, error = %err, "failed to delete expired object");
+                let obj_opts = object_info_to_opts(&object, true);
+                let event = config.eval(&obj_opts);
+
+                match event.action {
+                    Action::None => {}
+                    Action::Delete | Action::DeleteRestored => {
+                        info!(
+                            bucket = %bucket,
+                            key = %object.key,
+                            rule_id = %event.rule_id,
+                            "deleting expired object"
+                        );
+                        if let Err(err) = object_layer.delete_object(bucket, &object.key).await {
+                            warn!(bucket = %bucket, key = %object.key, error = %err, "failed to delete expired object");
+                        }
                     }
+                    Action::DeleteAllVersions => {
+                        info!(
+                            bucket = %bucket,
+                            key = %object.key,
+                            rule_id = %event.rule_id,
+                            "deleting all versions of expired object"
+                        );
+                        if let Err(err) = self.delete_all_versions(object_layer, bucket, &object.key).await {
+                            warn!(bucket = %bucket, key = %object.key, error = %err, "failed to delete all versions");
+                        }
+                    }
+                    Action::Transition => {
+                        info!(
+                            bucket = %bucket,
+                            key = %object.key,
+                            rule_id = %event.rule_id,
+                            storage_class = %event.storage_class,
+                            "transitioning object (not implemented)"
+                        );
+                        // Transition to different storage class would be implemented here
+                    }
+                    _ => {}
                 }
             }
 
@@ -133,15 +165,14 @@ impl LifecycleSys {
         object_layer: &dyn ObjectLayer,
         bucket: &str,
         prefix: &str,
-        rules: &[&LifecycleRule],
+        config: &LifecycleConfiguration,
     ) {
-        let version_rules: Vec<&LifecycleRule> = rules
-            .iter()
-            .copied()
-            .filter(|rule| rule.noncurrent_version_expiration.is_some())
-            .collect();
-
-        if version_rules.is_empty() {
+        if !config.rules.iter().any(|r| {
+            r.status == RuleStatus::Enabled
+                && (r.noncurrent_version_expiration.is_some()
+                    || r.noncurrent_version_transition.is_some()
+                    || r.del_marker_expiration.is_some())
+        }) {
             return;
         }
 
@@ -156,22 +187,111 @@ impl LifecycleSys {
             }
         };
 
-        for version in versions {
-            if should_expire_noncurrent_version(&version, &version_rules) {
-                if let Err(err) = object_layer
-                    .delete_object_version(bucket, &version.key, &version.version_id)
-                    .await
-                {
-                    warn!(
-                        bucket = %bucket,
-                        key = %version.key,
-                        version_id = %version.version_id,
-                        error = %err,
-                        "failed to delete expired noncurrent object version"
-                    );
+        // Group versions by key to track remaining versions
+        let mut versions_by_key: HashMap<String, Vec<&ObjectVersion>> = HashMap::new();
+        for version in &versions {
+            versions_by_key
+                .entry(version.key.clone())
+                .or_default()
+                .push(version);
+        }
+
+        for (key, key_versions) in versions_by_key {
+            let num_versions = key_versions.len() as i32;
+            let mut remaining_versions = num_versions;
+
+            for (idx, version) in key_versions.iter().enumerate() {
+                let successor_mod_time = if idx > 0 {
+                    Some(key_versions[idx - 1].last_modified)
+                } else {
+                    None
+                };
+
+                let obj_opts = ObjectOpts {
+                    name: version.key.clone(),
+                    mod_time: Some(version.last_modified),
+                    size: version.size,
+                    version_id: version.version_id.clone(),
+                    is_latest: version.is_latest,
+                    delete_marker: version.is_delete_marker,
+                    num_versions,
+                    successor_mod_time,
+                    ..Default::default()
+                };
+
+                let event = config.eval_at(&obj_opts, Utc::now(), remaining_versions);
+
+                match event.action {
+                    Action::None => {}
+                    Action::DeleteVersion | Action::DeleteRestoredVersion => {
+                        info!(
+                            bucket = %bucket,
+                            key = %key,
+                            version_id = %version.version_id,
+                            rule_id = %event.rule_id,
+                            "deleting expired noncurrent version"
+                        );
+                        if let Err(err) = object_layer
+                            .delete_object_version(bucket, &version.key, &version.version_id)
+                            .await
+                        {
+                            warn!(
+                                bucket = %bucket,
+                                key = %version.key,
+                                version_id = %version.version_id,
+                                error = %err,
+                                "failed to delete expired noncurrent object version"
+                            );
+                        } else {
+                            remaining_versions -= 1;
+                        }
+                    }
+                    Action::DelMarkerDeleteAllVersions => {
+                        info!(
+                            bucket = %bucket,
+                            key = %key,
+                            rule_id = %event.rule_id,
+                            "deleting all versions due to delete marker expiration"
+                        );
+                        if let Err(err) = self.delete_all_versions(object_layer, bucket, &key).await {
+                            warn!(bucket = %bucket, key = %key, error = %err, "failed to delete all versions");
+                        }
+                        break; // All versions deleted, move to next key
+                    }
+                    Action::TransitionVersion => {
+                        info!(
+                            bucket = %bucket,
+                            key = %key,
+                            version_id = %version.version_id,
+                            rule_id = %event.rule_id,
+                            storage_class = %event.storage_class,
+                            "transitioning noncurrent version (not implemented)"
+                        );
+                    }
+                    _ => {}
                 }
             }
         }
+    }
+
+    async fn delete_all_versions(
+        &self,
+        object_layer: &dyn ObjectLayer,
+        bucket: &str,
+        key: &str,
+    ) -> Result<()> {
+        let versions = object_layer
+            .list_object_versions(bucket, key, i32::MAX)
+            .await?;
+
+        for version in versions {
+            if version.key == key {
+                object_layer
+                    .delete_object_version(bucket, &version.key, &version.version_id)
+                    .await?;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -182,12 +302,38 @@ fn validate_config(config: &LifecycleConfiguration) -> Result<()> {
         ));
     }
 
+    if config.rules.len() > 1000 {
+        return Err(MaxioError::InvalidArgument(
+            "lifecycle configuration allows a maximum of 1000 rules".to_string(),
+        ));
+    }
+
+    // Check for duplicate rule IDs
+    let mut seen_ids = std::collections::HashSet::new();
+    for rule in &config.rules {
+        if !rule.id.is_empty() && !seen_ids.insert(&rule.id) {
+            return Err(MaxioError::InvalidArgument(format!(
+                "duplicate rule ID: {}",
+                rule.id
+            )));
+        }
+    }
+
     for rule in &config.rules {
         let has_expiration = rule.expiration.is_some();
+        let has_transition = rule.transition.is_some();
         let has_noncurrent_expiration = rule.noncurrent_version_expiration.is_some();
-        if !has_expiration && !has_noncurrent_expiration {
+        let has_noncurrent_transition = rule.noncurrent_version_transition.is_some();
+        let has_del_marker_expiration = rule.del_marker_expiration.is_some();
+
+        if !has_expiration
+            && !has_transition
+            && !has_noncurrent_expiration
+            && !has_noncurrent_transition
+            && !has_del_marker_expiration
+        {
             return Err(MaxioError::InvalidArgument(format!(
-                "lifecycle rule {} must include expiration action",
+                "lifecycle rule {} must include at least one action",
                 rule.id
             )));
         }
@@ -207,10 +353,34 @@ fn validate_config(config: &LifecycleConfiguration) -> Result<()> {
             }
         }
 
+        if let Some(trans) = &rule.transition {
+            if trans.days.is_some() && trans.date.is_some() {
+                return Err(MaxioError::InvalidArgument(format!(
+                    "lifecycle rule {} transition cannot include both days and date",
+                    rule.id
+                )));
+            }
+            if trans.storage_class.is_empty() {
+                return Err(MaxioError::InvalidArgument(format!(
+                    "lifecycle rule {} transition must specify storage class",
+                    rule.id
+                )));
+            }
+        }
+
         if let Some(noncurrent) = &rule.noncurrent_version_expiration {
             if noncurrent.noncurrent_days < 0 {
                 return Err(MaxioError::InvalidArgument(format!(
                     "lifecycle rule {} noncurrent days must be non-negative",
+                    rule.id
+                )));
+            }
+        }
+
+        if let Some(noncurrent_trans) = &rule.noncurrent_version_transition {
+            if noncurrent_trans.storage_class.is_empty() {
+                return Err(MaxioError::InvalidArgument(format!(
+                    "lifecycle rule {} noncurrent version transition must specify storage class",
                     rule.id
                 )));
             }
@@ -220,17 +390,27 @@ fn validate_config(config: &LifecycleConfiguration) -> Result<()> {
     Ok(())
 }
 
-fn should_expire_noncurrent_version(version: &ObjectVersion, rules: &[&LifecycleRule]) -> bool {
-    if version.is_latest {
-        return false;
-    }
+fn object_info_to_opts(object: &ObjectInfo, is_latest: bool) -> ObjectOpts {
+    // Extract user tags from metadata if present
+    let user_tags = object
+        .metadata
+        .iter()
+        .filter(|(k, _)| k.starts_with("x-amz-tagging"))
+        .map(|(k, v)| format!("{}={}", k, v))
+        .collect::<Vec<_>>()
+        .join("&");
 
-    let age_days = (Utc::now() - version.last_modified).num_days();
-    rules.iter().any(|rule| {
-        rule.noncurrent_version_expiration
-            .as_ref()
-            .is_some_and(|policy| age_days >= i64::from(policy.noncurrent_days))
-    })
+    ObjectOpts {
+        name: object.key.clone(),
+        user_tags,
+        mod_time: Some(object.last_modified),
+        size: object.size,
+        version_id: object.version_id.clone().unwrap_or_default(),
+        is_latest,
+        delete_marker: false, // ObjectInfo doesn't track delete markers
+        num_versions: 1,
+        ..Default::default()
+    }
 }
 
 pub fn is_expired(object: &ObjectInfo, rule: &LifecycleRule) -> bool {

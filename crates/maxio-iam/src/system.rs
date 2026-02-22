@@ -10,7 +10,7 @@ use maxio_common::error::{MaxioError, Result};
 use crate::{
     policy::evaluate_policy,
     store::IamStore,
-    types::{Effect, Policy, PolicyStatement, User},
+    types::{Effect, Policy, PolicyStatement, ServiceAccount, User},
 };
 
 #[derive(Debug, Clone)]
@@ -209,6 +209,100 @@ impl IAMSys {
         self.users_read()
             .ok()
             .and_then(|users| users.get(access_key).map(|user| user.secret_key.clone()))
+    }
+
+    // Service account methods
+    pub async fn create_service_account(
+        &self,
+        parent_user: &str,
+        access_key: Option<&str>,
+        secret_key: Option<&str>,
+        session_policy: Option<Policy>,
+        name: Option<String>,
+        description: Option<String>,
+        expiration: Option<chrono::DateTime<Utc>>,
+    ) -> Result<ServiceAccount> {
+        // Verify parent user exists
+        if self.users_read()?.get(parent_user).is_none() {
+            return Err(MaxioError::InvalidArgument(format!(
+                "parent user not found: {parent_user}"
+            )));
+        }
+
+        let access_key = access_key
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| format!("svc-{}", uuid::Uuid::new_v4().to_string()[..8].to_string()));
+        let secret_key = secret_key
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+
+        let sa = ServiceAccount {
+            access_key,
+            secret_key,
+            parent_user: parent_user.to_string(),
+            session_policy,
+            name,
+            description,
+            expiration,
+            created_at: Utc::now(),
+            updated_at: None,
+        };
+
+        self.store.save_service_account(&sa).await?;
+        Ok(sa)
+    }
+
+    pub async fn get_service_account(&self, access_key: &str) -> Result<Option<ServiceAccount>> {
+        self.store.get_service_account(access_key).await
+    }
+
+    pub async fn delete_service_account(&self, access_key: &str) -> Result<()> {
+        self.store.delete_service_account(access_key).await
+    }
+
+    pub async fn list_service_accounts(&self, parent_user: &str) -> Result<Vec<ServiceAccount>> {
+        self.store.list_service_accounts_for_user(parent_user).await
+    }
+
+    pub async fn update_service_account(
+        &self,
+        access_key: &str,
+        new_secret_key: Option<String>,
+        session_policy: Option<Option<Policy>>,
+        name: Option<Option<String>>,
+        description: Option<Option<String>>,
+        expiration: Option<Option<chrono::DateTime<Utc>>>,
+    ) -> Result<ServiceAccount> {
+        let mut sa = self.store.get_service_account(access_key).await?.ok_or_else(|| {
+            MaxioError::InvalidArgument(format!("service account not found: {access_key}"))
+        })?;
+
+        if let Some(secret) = new_secret_key {
+            sa.secret_key = secret;
+        }
+        if let Some(policy) = session_policy {
+            sa.session_policy = policy;
+        }
+        if let Some(n) = name {
+            sa.name = n;
+        }
+        if let Some(d) = description {
+            sa.description = d;
+        }
+        if let Some(e) = expiration {
+            sa.expiration = e;
+        }
+        sa.updated_at = Some(Utc::now());
+
+        self.store.save_service_account(&sa).await?;
+        Ok(sa)
+    }
+
+    pub fn service_account_secret_key(&self, access_key: &str) -> Option<String> {
+        // This is a sync method for auth - we need to check the store
+        // For now, return None as service accounts need async lookup
+        // In production, service accounts should be cached like users
+        None
     }
 
     async fn ensure_builtin_policies(&self) -> Result<()> {

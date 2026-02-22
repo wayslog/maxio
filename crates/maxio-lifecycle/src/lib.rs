@@ -7,6 +7,8 @@ pub use scanner::{FolderScanner, ScanMode, ScannerConfig, ScannerCycle, ScannerI
 pub use store::LifecycleStore;
 pub use system::LifecycleSys;
 pub use types::{
-    Expiration, LifecycleConfiguration, LifecycleFilter, LifecycleRule,
-    NoncurrentVersionExpiration, RuleStatus,
+    Action, AndOperator, DelMarkerExpiration, Expiration, LifecycleConfiguration,
+    LifecycleEvent, LifecycleFilter, LifecycleRule, NoncurrentVersionExpiration,
+    NoncurrentVersionTransition, ObjectOpts, RuleStatus, Tag, Transition,
+    TRANSITION_COMPLETE, TRANSITION_PENDING, expected_expiry_time,
 };

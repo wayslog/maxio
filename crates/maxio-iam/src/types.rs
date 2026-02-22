@@ -78,3 +78,28 @@ where
         StringOrVec::Many(values) => Ok(values),
     }
 }
+
+/// Service account - a programmatic access credential tied to a parent user
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServiceAccount {
+    pub access_key: String,
+    pub secret_key: String,
+    pub parent_user: String,
+    #[serde(default)]
+    pub session_policy: Option<Policy>,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub expiration: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    #[serde(default)]
+    pub updated_at: Option<DateTime<Utc>>,
+}
+
+impl ServiceAccount {
+    pub fn is_expired(&self) -> bool {
+        self.expiration.map_or(false, |exp| exp < Utc::now())
+    }
+}

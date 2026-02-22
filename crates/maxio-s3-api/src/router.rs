@@ -264,6 +264,9 @@ async fn post_object_dispatch(
         .await
     } else if query.contains_key("select") && query.get("select-type") == Some(&"2".to_string()) {
         Ok(handlers::select::select_object_content(State(store), Path((bucket, key)), body).await)
+    } else if query.contains_key("restore") {
+        handlers::object::restore_object(State(store), Path((bucket, key)), Query(query), body)
+            .await
     } else {
         Err(S3Error::from(MaxioError::NotImplemented(
             "unsupported POST operation for object route".to_string(),

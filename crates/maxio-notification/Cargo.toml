@@ -12,3 +12,17 @@ serde_json = { workspace = true }
 reqwest = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+
+# Notification targets
+rdkafka = { version = "0.36", features = ["cmake-build"], optional = true }
+lapin = { version = "2.3", optional = true }
+redis = { version = "0.25", features = ["tokio-comp", "aio"], optional = true }
+async-nats = { version = "0.33", optional = true }
+
+[features]
+default = []
+kafka = ["rdkafka"]
+amqp = ["lapin"]
+redis = ["dep:redis"]
+nats = ["async-nats"]
+all-targets = ["kafka", "amqp", "redis", "nats"]
