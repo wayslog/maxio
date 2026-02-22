@@ -1,0 +1,15 @@
+[package]
+name = "maxio-ftp"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+maxio-common = { workspace = true }
+maxio-storage = { workspace = true }
+maxio-iam = { workspace = true }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+bytes = { workspace = true }
+chrono = { workspace = true }

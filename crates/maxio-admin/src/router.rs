@@ -1,14 +1,15 @@
 use std::sync::Arc;
 
-use axum::{Router, middleware, routing::get};
+use axum::{middleware, routing::get, Router};
 use maxio_common::error::Result;
 use maxio_distributed::DistributedSys;
 use maxio_storage::traits::ObjectLayer;
 
 use crate::{
-    AdminSys, handlers,
+    handlers,
     metrics::{ApiMetrics, MetricsRegistry, StorageMetrics, SystemMetrics},
     middleware::admin_auth,
+    AdminSys,
 };
 
 pub struct AdminState {
@@ -108,6 +109,23 @@ pub fn admin_api_router(admin: Arc<AdminSys>) -> Router {
         .route(
             "/minio/admin/v3/batch/jobs/{job_id}",
             get(handlers::batch::get_batch_job).delete(handlers::batch::cancel_batch_job),
+        )
+        .route(
+            "/minio/admin/v3/profiling",
+            get(handlers::profiling::start_profiling).delete(handlers::profiling::stop_profiling),
+        )
+        .route("/minio/admin/v3/trace", get(handlers::trace::get_trace))
+        .route(
+            "/minio/admin/v3/speedtest",
+            get(handlers::speedtest::run_speedtest),
+        )
+        .route(
+            "/minio/admin/v3/drivespeed",
+            get(handlers::speedtest::run_drivespeed),
+        )
+        .route(
+            "/minio/admin/v3/netspeed",
+            get(handlers::speedtest::run_netspeed),
         )
         .route_layer(middleware::from_fn_with_state(
             Arc::clone(&admin),

@@ -100,6 +100,10 @@ impl XlStorage {
         })
     }
 
+    pub fn master_key(&self) -> &MasterKey {
+        &self.master_key
+    }
+
     pub async fn make_bucket(&self, bucket: &str) -> Result<()> {
         validate_bucket_name(bucket)?;
         let bucket_path = self.bucket_path(bucket);

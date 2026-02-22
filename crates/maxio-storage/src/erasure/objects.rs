@@ -5,7 +5,8 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use maxio_common::error::{MaxioError, Result};
-use maxio_common::types::{BucketInfo, ObjectInfo};
+use maxio_common::types::{BucketInfo, ObjectEncryption, ObjectInfo};
+use maxio_crypto::cipher;
 use md5::Md5;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
@@ -30,6 +31,13 @@ pub struct ErasureObjectLayer {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+struct EncryptionInfo {
+    algorithm: String,
+    sse_type: String,
+    key_md5: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct ErasureMeta {
     version: String,
     size: i64,
@@ -38,6 +46,8 @@ struct ErasureMeta {
     mod_time: DateTime<Utc>,
     metadata: HashMap<String, String>,
     erasure: ErasureInfo,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    encryption: Option<EncryptionInfo>,
 }
 
 impl ErasureObjectLayer {
@@ -162,7 +172,118 @@ impl ErasureObjectLayer {
             last_modified: meta.mod_time,
             metadata: meta.metadata.clone(),
             version_id: None,
-            encryption: None,
+            encryption: meta.encryption.as_ref().map(|enc| ObjectEncryption {
+                algorithm: enc.algorithm.clone(),
+                sse_type: enc.sse_type.clone(),
+                key_md5: enc.key_md5.clone(),
+            }),
+        }
+    }
+
+    fn resolve_put_encryption(
+        &self,
+        bucket: &str,
+        key: &str,
+        encryption: Option<&PutEncryptionOptions>,
+    ) -> Result<(Option<[u8; 32]>, Option<EncryptionInfo>)> {
+        let Some(encryption) = encryption else {
+            return Ok((None, None));
+        };
+
+        if let Some(customer_key) = encryption.sse_c_key {
+            let key_md5 = encryption.sse_c_key_md5.clone().ok_or_else(|| {
+                MaxioError::InvalidArgument(
+                    "missing SSE-C key MD5 for encrypted put request".to_string(),
+                )
+            })?;
+
+            return Ok((
+                Some(customer_key),
+                Some(EncryptionInfo {
+                    algorithm: "AES256".to_string(),
+                    sse_type: "SSE-C".to_string(),
+                    key_md5: Some(key_md5),
+                }),
+            ));
+        }
+
+        if encryption.sse_s3 {
+            let master_key = self.get_master_key()?;
+            return Ok((
+                Some(master_key.derive_object_key(bucket, key, None)),
+                Some(EncryptionInfo {
+                    algorithm: "AES256".to_string(),
+                    sse_type: "SSE-S3".to_string(),
+                    key_md5: None,
+                }),
+            ));
+        }
+
+        Ok((None, None))
+    }
+
+    fn get_master_key(&self) -> Result<&maxio_crypto::MasterKey> {
+        self.storage
+            .shard_storage(0)
+            .map(|s| s.master_key())
+            .ok_or_else(|| MaxioError::InternalError("missing shard 0 for encryption".to_string()))
+    }
+
+    fn decrypt_object_data(
+        &self,
+        bucket: &str,
+        key: &str,
+        encryption_info: Option<&EncryptionInfo>,
+        stored_data: &[u8],
+        request_encryption: Option<&GetEncryptionOptions>,
+    ) -> Result<Vec<u8>> {
+        let Some(encryption_info) = encryption_info else {
+            return Ok(stored_data.to_vec());
+        };
+
+        match encryption_info.sse_type.as_str() {
+            "SSE-S3" => {
+                let master_key = self.get_master_key()?;
+                let object_key = master_key.derive_object_key(bucket, key, None);
+                cipher::decrypt(&object_key, stored_data).map_err(|e| {
+                    MaxioError::InternalError(format!("SSE-S3 decryption failed: {e}"))
+                })
+            }
+            "SSE-C" => {
+                let request_encryption = request_encryption.ok_or_else(|| {
+                    MaxioError::InvalidArgument(
+                        "missing SSE-C headers for encrypted object access".to_string(),
+                    )
+                })?;
+                let customer_key = request_encryption.sse_c_key.ok_or_else(|| {
+                    MaxioError::InvalidArgument(
+                        "missing SSE-C customer key for encrypted object access".to_string(),
+                    )
+                })?;
+                let request_md5 = request_encryption.sse_c_key_md5.clone().ok_or_else(|| {
+                    MaxioError::InvalidArgument(
+                        "missing SSE-C customer key MD5 for encrypted object access".to_string(),
+                    )
+                })?;
+                let expected_md5 = encryption_info.key_md5.clone().ok_or_else(|| {
+                    MaxioError::InternalError(
+                        "encrypted object metadata missing SSE-C key md5".to_string(),
+                    )
+                })?;
+
+                if request_md5 != expected_md5 {
+                    return Err(MaxioError::AccessDenied(
+                        "SSE-C customer key MD5 mismatch".to_string(),
+                    ));
+                }
+
+                cipher::decrypt(&customer_key, stored_data).map_err(|e| {
+                    MaxioError::InternalError(format!("SSE-C decryption failed: {e}"))
+                })
+            }
+            other => Err(MaxioError::InternalError(format!(
+                "unsupported encryption type: {other}"
+            ))),
         }
     }
 }
@@ -335,11 +456,6 @@ impl ObjectLayer for ErasureObjectLayer {
         metadata: HashMap<String, String>,
         encryption: Option<PutEncryptionOptions>,
     ) -> Result<ObjectInfo> {
-        if encryption.is_some() {
-            return Err(MaxioError::NotImplemented(
-                "SSE is not implemented for erasure mode".to_string(),
-            ));
-        }
         validate_bucket_name(bucket)?;
         validate_object_key(key)?;
         self.ensure_bucket_exists_for_quorum(bucket).await?;
@@ -353,6 +469,14 @@ impl ObjectLayer for ErasureObjectLayer {
             }
         }
 
+        let (object_key, encryption_info) =
+            self.resolve_put_encryption(bucket, key, encryption.as_ref())?;
+        let data_to_store: Vec<u8> = match object_key {
+            Some(enc_key) => cipher::encrypt(&enc_key, &data)
+                .map_err(|e| MaxioError::InternalError(format!("encryption failed: {e}")))?,
+            None => data.to_vec(),
+        };
+
         let total_size = i64::try_from(data.len()).map_err(|_| {
             MaxioError::InvalidArgument(format!("object is too large to store: {bucket}/{key}"))
         })?;
@@ -361,20 +485,20 @@ impl ObjectLayer for ErasureObjectLayer {
         let content_type = content_type.unwrap_or(DEFAULT_CONTENT_TYPE).to_string();
 
         let config = self.storage.config();
-        let block_count = if data.is_empty() {
+        let block_count = if data_to_store.is_empty() {
             1
         } else {
-            data.len().div_ceil(config.block_size)
+            data_to_store.len().div_ceil(config.block_size)
         };
         let mut block_checksums = Vec::with_capacity(block_count);
 
         for block_idx in 0..block_count {
-            let block = if data.is_empty() {
+            let block = if data_to_store.is_empty() {
                 &[][..]
             } else {
                 let start = block_idx * config.block_size;
-                let end = std::cmp::min(start + config.block_size, data.len());
-                &data[start..end]
+                let end = std::cmp::min(start + config.block_size, data_to_store.len());
+                &data_to_store[start..end]
             };
 
             let checksum = format!("{:x}", Sha256::digest(block));
@@ -404,11 +528,13 @@ impl ObjectLayer for ErasureObjectLayer {
             }
         }
 
+        // Store encrypted size in erasure info for proper reconstruction
+        let stored_size = i64::try_from(data_to_store.len()).unwrap_or(total_size);
         let erasure_info = ErasureInfo {
             data_shards: config.data_shards,
             parity_shards: config.parity_shards,
             block_size: config.block_size,
-            total_size,
+            total_size: stored_size,
             block_checksums,
         };
 
@@ -420,6 +546,7 @@ impl ObjectLayer for ErasureObjectLayer {
             mod_time,
             metadata: metadata.clone(),
             erasure: erasure_info,
+            encryption: encryption_info.clone(),
         };
         self.write_meta_to_quorum(bucket, key, &meta).await?;
 
@@ -432,7 +559,11 @@ impl ObjectLayer for ErasureObjectLayer {
             last_modified: mod_time,
             metadata,
             version_id: None,
-            encryption: None,
+            encryption: encryption_info.map(|enc| ObjectEncryption {
+                algorithm: enc.algorithm,
+                sse_type: enc.sse_type,
+                key_md5: enc.key_md5,
+            }),
         })
     }
 
@@ -471,11 +602,6 @@ impl ObjectLayer for ErasureObjectLayer {
         key: &str,
         encryption: Option<GetEncryptionOptions>,
     ) -> Result<(ObjectInfo, Bytes)> {
-        if encryption.is_some() {
-            return Err(MaxioError::NotImplemented(
-                "SSE is not implemented for erasure mode".to_string(),
-            ));
-        }
         validate_bucket_name(bucket)?;
         validate_object_key(key)?;
 
@@ -561,7 +687,15 @@ impl ObjectLayer for ErasureObjectLayer {
             output.truncate(total_size);
         }
 
-        Ok((object_info, Bytes::from(output)))
+        let decrypted = self.decrypt_object_data(
+            bucket,
+            key,
+            meta.encryption.as_ref(),
+            &output,
+            encryption.as_ref(),
+        )?;
+
+        Ok((object_info, Bytes::from(decrypted)))
     }
 
     async fn get_object_version(
@@ -586,13 +720,8 @@ impl ObjectLayer for ErasureObjectLayer {
         &self,
         bucket: &str,
         key: &str,
-        encryption: Option<GetEncryptionOptions>,
+        _encryption: Option<GetEncryptionOptions>,
     ) -> Result<ObjectInfo> {
-        if encryption.is_some() {
-            return Err(MaxioError::NotImplemented(
-                "SSE is not implemented for erasure mode".to_string(),
-            ));
-        }
         validate_bucket_name(bucket)?;
         validate_object_key(key)?;
 

@@ -4,6 +4,10 @@ pub mod health;
 pub mod info;
 pub mod metrics;
 pub mod policy;
+pub mod profiling;
+pub mod site_replication;
+pub mod speedtest;
+pub mod trace;
 pub mod user;
 
 use axum::{Json, http::StatusCode, response::IntoResponse};

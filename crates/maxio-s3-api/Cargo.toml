@@ -11,6 +11,7 @@ maxio-notification = { workspace = true }
 maxio-lifecycle = { workspace = true }
 maxio-distributed = { workspace = true }
 maxio-storage = { workspace = true }
+maxio-s3select = { workspace = true }
 base64 = { workspace = true }
 md-5 = { workspace = true }
 axum = { workspace = true }

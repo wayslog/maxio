@@ -9,8 +9,17 @@ use uuid::Uuid;
 use crate::batch::{
     expiration::{ExpirationJobConfig, collect_expired_keys},
     job::BatchJob,
+    key_rotation::{KeyRotationJobConfig, collect_keys_for_rotation, rotate_object_key},
+    replication::{ReplicationJobConfig, collect_keys_for_replication, replicate_object},
     types::{JobStatus, JobType},
 };
+
+#[derive(Debug, Clone)]
+pub enum BatchJobConfig {
+    Expiration(ExpirationJobConfig),
+    Replication(ReplicationJobConfig),
+    KeyRotation(KeyRotationJobConfig),
+}
 
 #[derive(Clone)]
 pub struct JobScheduler {
@@ -33,17 +42,54 @@ impl JobScheduler {
         job_type: JobType,
         expiration: Option<ExpirationJobConfig>,
     ) -> Result<BatchJob> {
-        if job_type == JobType::Expiration {
-            expiration
-                .as_ref()
-                .ok_or_else(|| {
+        let config = match job_type {
+            JobType::Expiration => {
+                let cfg = expiration.ok_or_else(|| {
                     MaxioError::InvalidArgument(
                         "expiration payload is required for expiration jobs".to_string(),
                     )
-                })?
-                .validate()?;
-        }
+                })?;
+                cfg.validate()?;
+                BatchJobConfig::Expiration(cfg)
+            }
+            JobType::Replication => {
+                return Err(MaxioError::InvalidArgument(
+                    "use submit_replication_job for replication jobs".to_string(),
+                ));
+            }
+            JobType::KeyRotation => {
+                return Err(MaxioError::InvalidArgument(
+                    "use submit_key_rotation_job for key rotation jobs".to_string(),
+                ));
+            }
+        };
 
+        self.submit_job_internal(job_type, config).await
+    }
+
+    pub async fn submit_replication_job(
+        &self,
+        config: ReplicationJobConfig,
+    ) -> Result<BatchJob> {
+        config.validate()?;
+        self.submit_job_internal(JobType::Replication, BatchJobConfig::Replication(config))
+            .await
+    }
+
+    pub async fn submit_key_rotation_job(
+        &self,
+        config: KeyRotationJobConfig,
+    ) -> Result<BatchJob> {
+        config.validate()?;
+        self.submit_job_internal(JobType::KeyRotation, BatchJobConfig::KeyRotation(config))
+            .await
+    }
+
+    async fn submit_job_internal(
+        &self,
+        job_type: JobType,
+        config: BatchJobConfig,
+    ) -> Result<BatchJob> {
         let id = Uuid::new_v4().to_string();
         let job = BatchJob {
             id: id.clone(),
@@ -58,7 +104,7 @@ impl JobScheduler {
 
         let scheduler = self.clone();
         let handle = tokio::spawn(async move {
-            scheduler.run_job(id, job_type, expiration).await;
+            scheduler.run_job(id, config).await;
         });
         self.tasks.write().await.insert(job.id.clone(), handle);
 
@@ -94,19 +140,13 @@ impl JobScheduler {
         Ok(job.clone())
     }
 
-    async fn run_job(
-        &self,
-        id: String,
-        job_type: JobType,
-        expiration: Option<ExpirationJobConfig>,
-    ) {
+    async fn run_job(&self, id: String, config: BatchJobConfig) {
         self.update_status(&id, JobStatus::Running).await;
 
-        let result = match job_type {
-            JobType::Expiration => self.run_expiration_job(&id, expiration).await,
-            JobType::Replication | JobType::KeyRotation => Err(MaxioError::NotImplemented(
-                "batch job type is not implemented yet".to_string(),
-            )),
+        let result = match config {
+            BatchJobConfig::Expiration(cfg) => self.run_expiration_job(&id, cfg).await,
+            BatchJobConfig::Replication(cfg) => self.run_replication_job(&id, cfg).await,
+            BatchJobConfig::KeyRotation(cfg) => self.run_key_rotation_job(&id, cfg).await,
         };
 
         match result {
@@ -124,14 +164,7 @@ impl JobScheduler {
         self.tasks.write().await.remove(&id);
     }
 
-    async fn run_expiration_job(
-        &self,
-        id: &str,
-        expiration: Option<ExpirationJobConfig>,
-    ) -> Result<()> {
-        let config = expiration.ok_or_else(|| {
-            MaxioError::InvalidArgument("expiration payload is required".to_string())
-        })?;
+    async fn run_expiration_job(&self, id: &str, config: ExpirationJobConfig) -> Result<()> {
         let keys = collect_expired_keys(self.object_layer.as_ref(), &config).await?;
 
         let total = keys.len();
@@ -144,6 +177,42 @@ impl JobScheduler {
             self.object_layer
                 .delete_object(&config.bucket, &key)
                 .await?;
+            let progress = (((index + 1) * 100) / total) as u8;
+            self.update_progress(id, progress).await;
+        }
+
+        Ok(())
+    }
+
+    async fn run_replication_job(&self, id: &str, config: ReplicationJobConfig) -> Result<()> {
+        let keys = collect_keys_for_replication(self.object_layer.as_ref(), &config).await?;
+
+        let total = keys.len();
+        if total == 0 {
+            self.update_progress(id, 100).await;
+            return Ok(());
+        }
+
+        for (index, key) in keys.into_iter().enumerate() {
+            replicate_object(self.object_layer.as_ref(), &config, &key).await?;
+            let progress = (((index + 1) * 100) / total) as u8;
+            self.update_progress(id, progress).await;
+        }
+
+        Ok(())
+    }
+
+    async fn run_key_rotation_job(&self, id: &str, config: KeyRotationJobConfig) -> Result<()> {
+        let keys = collect_keys_for_rotation(self.object_layer.as_ref(), &config).await?;
+
+        let total = keys.len();
+        if total == 0 {
+            self.update_progress(id, 100).await;
+            return Ok(());
+        }
+
+        for (index, key) in keys.into_iter().enumerate() {
+            rotate_object_key(self.object_layer.as_ref(), &config, &key).await?;
             let progress = (((index + 1) * 100) / total) as u8;
             self.update_progress(id, progress).await;
         }

@@ -9,6 +9,7 @@ maxio-auth = { workspace = true }
 maxio-iam = { workspace = true }
 maxio-storage = { workspace = true }
 maxio-distributed = { workspace = true }
+maxio-crypto = { workspace = true }
 axum = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
@@ -17,3 +18,4 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
+reqwest = { workspace = true }

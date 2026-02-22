@@ -12,6 +12,8 @@ members = [
     "crates/maxio-lifecycle",
     "crates/maxio-admin",
     "crates/maxio-common",
+    "crates/maxio-s3select",
+    "crates/maxio-kms",
 ]
 
 [workspace.package]
@@ -32,6 +34,8 @@ maxio-distributed = { path = "crates/maxio-distributed" }
 maxio-notification = { path = "crates/maxio-notification" }
 maxio-lifecycle = { path = "crates/maxio-lifecycle" }
 maxio-admin = { path = "crates/maxio-admin" }
+maxio-s3select = { path = "crates/maxio-s3select" }
+maxio-kms = { path = "crates/maxio-kms" }
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }

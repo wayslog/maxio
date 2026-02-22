@@ -4,6 +4,7 @@ pub mod errors;
 pub mod grid;
 pub mod healing;
 pub mod replication;
+pub mod site_replication;
 pub mod system;
 pub mod types;
 
@@ -13,5 +14,8 @@ pub use errors::{GridError, Result as GridResult};
 pub use grid::*;
 pub use healing::{HealEngine, HealResult, HealResultItem, HealSequence, HealingTracker, MrfQueue};
 pub use replication::*;
+pub use site_replication::{
+    BucketSyncManager, IAMSyncManager, PeerSite, SiteReplicationConfig, SiteReplicationStatus,
+};
 pub use system::DistributedSys;
 pub use types::{ClusterConfig, ClusterStatus, NodeInfo, NodeStatus};
